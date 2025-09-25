@@ -60,12 +60,12 @@ Contains templates for creating custom AOI files:
 ```python
 from scripts.ain_solar_mapper import SolarPotentialMapper
 
-mapper = SolarPotentialMapper('your-project-id')
+mapper = SolarPotentialMapper('project-id')
 
 # Load from individual city file
 mapper.set_aoi_from_city_file('delhi')
 
-# Load from master file
+# Load from master file  
 mapper.set_aoi_from_geojson('mumbai')
 
 # Load from tier file

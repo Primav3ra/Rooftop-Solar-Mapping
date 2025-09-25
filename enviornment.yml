@@ -1,0 +1,14 @@
+   # Create environment.yml
+   name: pv-mapping
+   channels:
+     - conda-forge
+     - defaults
+   dependencies:
+     - python=3.9
+     - earthengine-api
+     - geopandas
+     - pandas
+     - numpy
+     - matplotlib
+     - folium
+     - jupyter

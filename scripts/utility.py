@@ -1,0 +1,150 @@
+import ee
+import pandas as pd
+import numpy as np
+from typing import List, Tuple, Dict, Any, Optional
+
+class SolarMappingUtils:
+    def __init__(self, project_id: str):
+        self.project_id = project_id
+        ee.Initialize(project=project_id)
+        print("✅ Earth Engine initialized successfully!")
+    
+    def create_aoi_from_coordinates(self, coordinates: List[List[float]]) -> ee.Geometry:
+        """Create Area of Interest from coordinate list"""
+        return ee.Geometry.Polygon(coordinates)
+    
+    def load_aoi_from_geojson(self, geojson_path: str) -> ee.Geometry:
+        """Load AOI from GeoJSON file"""
+        import json
+        with open(geojson_path, 'r') as f:
+            geojson_data = json.load(f)
+        # Get first feature's coordinates
+        coordinates = geojson_data['features'][0]['geometry']['coordinates'][0]
+        return ee.Geometry.Polygon(coordinates)
+    
+    def load_aoi_from_master_geojson(self, city_name: str, geojson_path: str = 'data/aoi.geojson') -> ee.Geometry:
+        """Load AOI from master GeoJSON file by city name"""
+        import json
+        
+        with open(geojson_path, 'r') as f:
+            geojson_data = json.load(f)
+        
+        # Find the city feature
+        city_feature = None
+        for feature in geojson_data['features']:
+            if feature['properties']['city_key'] == city_name.lower():
+                city_feature = feature
+                break
+        
+        if city_feature is None:
+            available_cities = [f['properties']['city_key'] for f in geojson_data['features']]
+            raise ValueError(f"City '{city_name}' not found in GeoJSON. Available: {available_cities}")
+        
+        # Convert to Earth Engine geometry
+        coordinates = city_feature['geometry']['coordinates'][0]
+        return ee.Geometry.Polygon(coordinates)
+    
+    def load_aoi_from_city_file(self, city_name: str) -> ee.Geometry:
+        """Load AOI from individual city file in organized structure"""
+        file_path = f'data/aoi/cities/{city_name.lower()}.geojson'
+        return self.load_aoi_from_geojson(file_path)
+    
+    def load_aoi_from_tier_file(self, tier: str) -> ee.Geometry:
+        """Load AOI from tier file in organized structure"""
+        file_path = f'data/aoi/tiers/{tier.lower().replace(" ", "_")}.geojson'
+        return self.load_aoi_from_geojson(file_path)
+    
+    def load_aoi_from_region_file(self, region: str) -> ee.Geometry:
+        """Load AOI from region file in organized structure"""
+        file_path = f'data/aoi/regions/{region.lower()}.geojson'
+        return self.load_aoi_from_geojson(file_path)
+    
+    def get_available_datasets(self) -> Dict[str, str]:
+        """Get information about key datasets we'll use"""
+        return {
+            'srtm_dem': 'USGS/SRTMGL1_003',
+            'aster_dem': 'NASA/ASTER_GED/AG100_003',
+            'sentinel2': 'COPERNICUS/S2_SR',
+            'landsat8': 'LANDSAT/LC08/C02/T1_L2',
+            'global_solar_atlas': 'projects/global-solar-atlas/solar-irradiance',
+            'nasa_power': 'NASA/NCEP_RE/2m_temperature'
+        }
+    
+    def get_elevation_data(self, aoi: ee.Geometry) -> ee.Image:
+        """Get Digital Elevation Model for the AOI"""
+        # Use SRTM for global coverage
+        dem = ee.Image('USGS/SRTMGL1_003').clip(aoi)
+        return dem
+    
+    def calculate_slope_aspect(self, dem: ee.Image) -> Dict[str, ee.Image]:
+        """Calculate slope and aspect from DEM"""
+        terrain = ee.Terrain.products(dem)
+        slope = terrain.select('slope')
+        aspect = terrain.select('aspect')
+        
+        return {
+            'slope': slope,
+            'aspect': aspect,
+            'elevation': dem
+        }
+    
+    def create_exclusion_mask(self, dem: ee.Image, aoi: ee.Geometry) -> ee.Image:
+        """Create mask for unsuitable areas"""
+        # Calculate slope
+        slope = ee.Terrain.products(dem).select('slope')
+        
+        # Exclude very steep slopes (>30 degrees)
+        steep_slopes = slope.gt(30)
+        
+        # Create exclusion mask (0 = excluded, 1 = suitable)
+        exclusion_mask = steep_slopes.Not()
+        
+        return exclusion_mask
+    
+    def get_solar_irradiance_data(self, aoi: ee.Geometry) -> ee.Image:
+        """Get solar irradiance data for the AOI"""
+        # Using NASA POWER data as a proxy for solar irradiance
+        # This is a simplified approach - you may want to use Global Solar Atlas
+        solar_data = ee.ImageCollection('NASA/NCEP_RE/2m_temperature').first()
+        return solar_data.clip(aoi)
+    
+    def calculate_solar_potential(self, dem: ee.Image, aoi: ee.Geometry) -> Dict[str, ee.Image]:
+        """Calculate basic solar potential metrics"""
+        # Get terrain data
+        terrain = self.calculate_slope_aspect(dem)
+        
+        # Get exclusion mask
+        exclusion = self.create_exclusion_mask(dem, aoi)
+        
+        # Basic solar potential calculation (simplified)
+        # In reality, you'd integrate with solar irradiance data
+        solar_potential = terrain['slope'].multiply(-1).add(90).multiply(exclusion)
+        
+        return {
+            'solar_potential': solar_potential,
+            'slope': terrain['slope'],
+            'aspect': terrain['aspect'],
+            'exclusion_mask': exclusion
+        }
+    
+    def export_results_to_geojson(self, results: Dict[str, Any], output_path: str):
+        """Export analysis results to GeoJSON format"""
+        import json
+        
+        # Convert Earth Engine results to GeoJSON format
+        geojson_data = {
+            "type": "FeatureCollection",
+            "features": []
+        }
+        
+        # This is a simplified export - you'd need to convert EE images to GeoJSON
+        # For now, just save the metadata
+        with open(output_path, 'w') as f:
+            json.dump(results, f, indent=2)
+        
+        print(f"✅ Results exported to {output_path}")
+
+# Test the connection
+PROJECT_ID = 'alpha-earth-project-473210' 
+ee.Initialize(project=PROJECT_ID)
+print(ee.String('Connection successful!').getInfo())
