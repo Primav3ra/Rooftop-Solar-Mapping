@@ -1,0 +1,20 @@
+name: pv-mapping
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - earthengine-api
+  - pandas
+  - numpy
+  - matplotlib
+  - folium
+  - jupyter
+  - requests
+  - pip
+  - fastapi
+  - uvicorn
+  - geopandas
+  - theengine-api
+  - pip:
+    - geemap

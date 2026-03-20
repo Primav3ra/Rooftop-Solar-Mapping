@@ -19,7 +19,7 @@ def test_basic_pipeline():
     try:
         # Initialize mapper
         print("1. Initializing Solar Potential Mapper...")
-        mapper = SolarPotentialMapper('alpha-earth-project-473210')
+        mapper = SolarPotentialMapper('pv-mapping-india')
         print("✅ Mapper initialized successfully")
         
         # Test AOI manager
@@ -75,7 +75,7 @@ def test_aoi_management():
     print("=" * 30)
     
     try:
-        mapper = SolarPotentialMapper('alpha-earth-project-473210')
+        mapper = SolarPotentialMapper('pv-mapping-india')
         
         # Test city info
         print("1. Testing city information retrieval...")
@@ -106,7 +106,7 @@ def test_data_validation():
     print("=" * 30)
     
     try:
-        mapper = SolarPotentialMapper('alpha-earth-project-473210')
+        mapper = SolarPotentialMapper('pv-mapping-india')
         
         # Test invalid city name
         print("1. Testing invalid city name handling...")
@@ -139,7 +139,7 @@ def run_performance_test():
     print("=" * 30)
     
     try:
-        mapper = SolarPotentialMapper('alpha-earth-project-473210')
+        mapper = SolarPotentialMapper('pv-mapping-india')
         
         import time
         start_time = time.time()
