@@ -2,7 +2,7 @@
 
 This directory contains organized Area of Interest files for the Solar Mapping project.
 
-## 📁 Directory Structure
+## Directory structure
 
 ```
 data/aoi/
@@ -13,7 +13,7 @@ data/aoi/
 └── README.md        # This file
 ```
 
-## 🏙️ Cities Directory
+## Cities directory
 
 Contains individual GeoJSON files for each city:
 - `delhi.geojson` - Delhi (Tier 1)
@@ -32,14 +32,14 @@ Contains individual GeoJSON files for each city:
 - `coimbatore.geojson` - Coimbatore (Tier 3)
 - `vadodara.geojson` - Vadodara (Tier 3)
 
-## 📊 Tiers Directory
+## Tiers directory
 
 Contains files grouped by city tier:
 - `tier_1.geojson` - All Tier 1 cities (6 cities)
 - `tier_2.geojson` - All Tier 2 cities (5 cities)
 - `tier_3.geojson` - All Tier 3 cities (4 cities)
 
-## 🌍 Regions Directory
+## Regions directory
 
 Contains files grouped by geographical region:
 - `north.geojson` - North India (Delhi, Chandigarh, Jaipur)
@@ -48,13 +48,13 @@ Contains files grouped by geographical region:
 - `east.geojson` - East India (Kolkata)
 - `central.geojson` - Central India (Hyderabad, Indore, Bhopal)
 
-## 🛠️ Custom Directory
+## Custom directory
 
 Contains templates for creating custom AOI files:
 - `template.geojson` - Template for custom AOI creation
 - `README.md` - Instructions for creating custom AOIs
 
-## 💻 Usage Examples
+## Usage examples
 
 ### Loading Individual Cities
 ```python
@@ -91,7 +91,7 @@ aoi = utils.load_aoi_from_tier_file('tier_2')
 aoi = utils.load_aoi_from_region_file('west')
 ```
 
-## 🔄 Regenerating AOI Files
+## Regenerating AOI files
 
 To regenerate all AOI files with the organized structure:
 
@@ -105,7 +105,7 @@ This will:
 3. Generate tier-based files in `data/aoi/tiers/`
 4. Generate regional files in `data/aoi/regions/`
 
-## 📋 File Format
+## File format
 
 All AOI files follow the GeoJSON FeatureCollection format:
 
@@ -139,7 +139,7 @@ All AOI files follow the GeoJSON FeatureCollection format:
 }
 ```
 
-## 🎯 Benefits of Organized Structure
+## Benefits of organized structure
 
 1. **Clean Organization**: Files are logically grouped by type
 2. **Easy Navigation**: Quick access to specific cities, tiers, or regions
@@ -147,7 +147,7 @@ All AOI files follow the GeoJSON FeatureCollection format:
 4. **Flexible**: Multiple ways to load AOI data
 5. **Maintainable**: Clear separation of concerns
 
-## 📝 Notes
+## Notes
 
 - All coordinates are in [longitude, latitude] format
 - City keys are lowercase (e.g., 'delhi', 'mumbai')

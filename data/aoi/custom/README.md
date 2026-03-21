@@ -2,20 +2,20 @@
 
 This folder contains custom Area of Interest (AOI) files created by users.
 
-## 🚀 Quick Start
+## Quick start
 
 1. Copy `template.geojson` to create your custom AOI
 2. Modify the coordinates in the geometry section
 3. Update the properties (name, description, etc.)
 4. Use the file in your solar mapping analysis
 
-## 📍 Coordinate Format
+## Coordinate format
 
 Coordinates should be in [longitude, latitude] format:
 - **Longitude**: -180 to 180 (negative for west, positive for east)
 - **Latitude**: -90 to 90 (negative for south, positive for north)
 
-## 📝 Example Custom AOI
+## Example custom AOI
 
 ```json
 {
@@ -44,7 +44,7 @@ Coordinates should be in [longitude, latitude] format:
 }
 ```
 
-## 🛠️ Usage in Code
+## Usage in code
 
 ```python
 from scripts.ain_solar_mapper import SolarPotentialMapper
@@ -64,7 +64,7 @@ mapper.set_aoi_by_coordinates([
 mapper.set_aoi_from_geojson('custom_city', 'data/aoi/custom/my_custom_city.geojson')
 ```
 
-## 💡 Tips
+## Tips
 
 - Use online mapping tools to get accurate coordinates
 - Ensure the polygon is closed (first and last coordinates are the same)

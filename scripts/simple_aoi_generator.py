@@ -202,7 +202,7 @@ def get_cities_data() -> Dict[str, CityAOI]:
 
 def generate_master_aoi():
     """Generate master AOI GeoJSON with all cities"""
-    print("🗺️  Generating master AOI GeoJSON...")
+    print("[INFO] Generating master AOI GeoJSON...")
     
     cities = get_cities_data()
     
@@ -239,14 +239,14 @@ def generate_master_aoi():
     with open('data/aoi.geojson', 'w') as f:
         json.dump(master_geojson, f, indent=2)
     
-    print(f"✅ Master AOI GeoJSON created with {len(master_geojson['features'])} cities")
-    print("📁 Saved to: data/aoi.geojson")
+    print(f"[OK] Master AOI GeoJSON created with {len(master_geojson['features'])} cities")
+    print("     Saved to: data/aoi.geojson")
     
     return master_geojson
 
 def generate_individual_city_files():
     """Generate individual AOI files for each city in organized folders"""
-    print("\n🏙️  Generating individual city AOI files...")
+    print("\n[INFO] Generating individual city AOI files...")
     
     cities = get_cities_data()
     
@@ -280,13 +280,13 @@ def generate_individual_city_files():
         with open(filename, 'w') as f:
             json.dump(city_geojson, f, indent=2)
         
-        print(f"✅ Created: {filename}")
+        print(f"[OK] Created: {filename}")
     
-    print(f"✅ Individual city files created for {len(cities)} cities")
+    print(f"[OK] Individual city files created for {len(cities)} cities")
 
 def generate_tier_files():
     """Generate AOI files grouped by tier"""
-    print("\n📊 Generating tier-based AOI files...")
+    print("\n[INFO] Generating tier-based AOI files...")
     
     cities = get_cities_data()
     
@@ -324,11 +324,11 @@ def generate_tier_files():
         with open(filename, 'w') as f:
             json.dump(tier_geojson, f, indent=2)
         
-        print(f"✅ Created: {filename} ({len(cities_in_tier)} cities)")
+        print(f"[OK] Created: {filename} ({len(cities_in_tier)} cities)")
 
 def generate_regional_files():
     """Generate AOI files grouped by region"""
-    print("\n🌍 Generating regional AOI files...")
+    print("\n[INFO] Generating regional AOI files...")
     
     cities = get_cities_data()
     
@@ -375,11 +375,11 @@ def generate_regional_files():
         with open(filename, 'w') as f:
             json.dump(regional_geojson, f, indent=2)
         
-        print(f"✅ Created: {filename} ({len(cities_in_region)} cities)")
+        print(f"[OK] Created: {filename} ({len(cities_in_region)} cities)")
 
 def main():
     """Main function to generate organized AOI files"""
-    print("🚀 Starting Organized AOI Generation")
+    print("[INFO] Starting organized AOI generation")
     print("=" * 50)
     
     try:
@@ -395,8 +395,8 @@ def main():
         # Generate regional files
         generate_regional_files()
         
-        print("\n🎉 All organized AOI files generated successfully!")
-        print(f"📊 Total cities: {len(master_geojson['features'])}")
+        print("\n[PASS] All organized AOI files generated successfully")
+        print(f"       Total cities: {len(master_geojson['features'])}")
         
         # Show summary by tier
         tier_counts = {}
@@ -404,18 +404,18 @@ def main():
             tier = feature['properties']['tier']
             tier_counts[tier] = tier_counts.get(tier, 0) + 1
         
-        print("\n📈 Cities by tier:")
+        print("\n[INFO] Cities by tier:")
         for tier, count in tier_counts.items():
-            print(f"  • {tier}: {count} cities")
+            print(f"  - {tier}: {count} cities")
         
-        print("\n📁 Generated files:")
-        print("  • data/aoi.geojson (Master file)")
-        print("  • data/aoi/cities/ (Individual city files)")
-        print("  • data/aoi/tiers/ (Tier-based files)")
-        print("  • data/aoi/regions/ (Regional files)")
+        print("\n[INFO] Generated files:")
+        print("  - data/aoi.geojson (master file)")
+        print("  - data/aoi/cities/ (individual city files)")
+        print("  - data/aoi/tiers/ (tier-based files)")
+        print("  - data/aoi/regions/ (regional files)")
         
     except Exception as e:
-        print(f"❌ Error generating AOI files: {str(e)}")
+        print(f"[FAIL] Error generating AOI files: {str(e)}")
         raise
 
 if __name__ == "__main__":
