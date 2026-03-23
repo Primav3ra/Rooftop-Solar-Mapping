@@ -12,7 +12,7 @@ ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
-import ee
+import ee  # pyright: ignore[reportMissingImports]
 
 DELHI_SMALL = [
     [77.20, 28.58],
