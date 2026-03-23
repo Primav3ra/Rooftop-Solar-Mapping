@@ -30,9 +30,9 @@ def main() -> int:
     except ImportError:
         from irradiance_baseline import get_merra_baseline_info
 
-    info = get_merra_baseline_info(aoi, start_year=2015, end_year=2019)
+    info = get_merra_baseline_info(aoi, start_year=2020, end_year=2024)
     kwh = info["merra_mean_annual_sw_kwh_m2"]
-    print(f"[PASS] MERRA-2 mean annual SW (2015-2019): {kwh} kWh/m^2/year")
+    print(f"[PASS] MERRA-2 mean annual SW (2020-2024): {kwh} kWh/m^2/year")
     print(f"       collection={info['merra_collection']}, band={info['merra_band']}")
     return 0
 

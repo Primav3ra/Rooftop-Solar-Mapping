@@ -1,7 +1,5 @@
 import ee
-import pandas as pd
-import numpy as np
-from typing import List, Tuple, Dict, Any, Optional
+from typing import List, Dict, Any, Optional
 
 # Optional: use centralized dataset loaders (Open Buildings, FABDEM, Sentinel-2, MODIS LST)
 _HAS_DATASETS = False
@@ -29,13 +27,27 @@ except ImportError:
 
 try:
     from irradiance_baseline import get_merra_baseline_info as _get_merra_baseline_info
+    from irradiance_baseline import get_merra_range_info as _get_merra_range_info
+    from irradiance_baseline import latest_complete_5y_range as _latest_complete_5y_range
     _HAS_IRRADIANCE = True
 except ImportError:
     try:
         from scripts.irradiance_baseline import get_merra_baseline_info as _get_merra_baseline_info
+        from scripts.irradiance_baseline import get_merra_range_info as _get_merra_range_info
+        from scripts.irradiance_baseline import latest_complete_5y_range as _latest_complete_5y_range
         _HAS_IRRADIANCE = True
     except ImportError:
         _HAS_IRRADIANCE = False
+
+try:
+    from irradiance_baseline import get_roof_masked_merra_baseline_info as _get_roof_masked_merra_baseline_info
+    _HAS_ROOF_MASKED_IRRADIANCE = True
+except ImportError:
+    try:
+        from scripts.irradiance_baseline import get_roof_masked_merra_baseline_info as _get_roof_masked_merra_baseline_info
+        _HAS_ROOF_MASKED_IRRADIANCE = True
+    except ImportError:
+        _HAS_ROOF_MASKED_IRRADIANCE = False
 
 
 class SolarMappingUtils:
@@ -177,8 +189,8 @@ class SolarMappingUtils:
     def get_merra_baseline_stats(
         self,
         aoi: ee.Geometry,
-        start_year: int = 2015,
-        end_year: int = 2019,
+        start_year: int = 2020,
+        end_year: int = 2024,
         scale_m: float = 50_000.0,
     ) -> Dict[str, Any]:
         """
@@ -192,13 +204,94 @@ class SolarMappingUtils:
             aoi, start_year=start_year, end_year=end_year, scale_m=scale_m
         )
 
-    def get_solar_irradiance_data(self, aoi: ee.Geometry) -> ee.Image:
-        """Get solar irradiance data for the AOI"""
-        # Using NASA POWER data as a proxy for solar irradiance
-        # This is a simplified approach - you may want to use Global Solar Atlas
-        solar_data = ee.ImageCollection('NASA/NCEP_RE/2m_temperature').first()
-        return solar_data.clip(aoi)
-    
+    def get_merra_latest_5y_baseline_stats(
+        self,
+        aoi: ee.Geometry,
+        scale_m: float = 50_000.0,
+    ) -> Dict[str, Any]:
+        """Latest complete 5-year mean annual MERRA baseline."""
+        if not _HAS_IRRADIANCE:
+            raise RuntimeError("irradiance_baseline module not found")
+        start_year, end_year = _latest_complete_5y_range()
+        return _get_merra_baseline_info(aoi, start_year=start_year, end_year=end_year, scale_m=scale_m)
+
+    def get_merra_range_stats(
+        self,
+        aoi: ee.Geometry,
+        start_date: str,
+        end_date_exclusive: str,
+        scale_m: float = 50_000.0,
+    ) -> Dict[str, Any]:
+        """Arbitrary date-range MERRA totals/annualized stats (daily/monthly/custom)."""
+        if not _HAS_IRRADIANCE:
+            raise RuntimeError("irradiance_baseline module not found")
+        return _get_merra_range_info(
+            aoi=aoi,
+            start_date=start_date,
+            end_date_exclusive=end_date_exclusive,
+            scale_m=scale_m,
+        )
+
+    def get_roof_masked_merra_baseline_stats(
+        self,
+        aoi: ee.Geometry,
+        exclusion_mask: Optional[ee.Image] = None,
+        roof_year: Optional[int] = 2022,
+        presence_threshold: float = 0.5,
+        min_height_m: float = 0.0,
+        start_year: Optional[int] = None,
+        end_year: Optional[int] = None,
+        scale_m: float = 50_000.0,
+    ) -> Dict[str, Any]:
+        """
+        Pre-penalty rooftop baseline: candidate roof area (m2) x regional MERRA-2 irradiance.
+
+        Returns:
+          roof_area_m2                  -- total candidate rooftop area at 4m resolution
+          regional_irradiance_kwh_m2_year -- MERRA-2 mean annual irradiance for the region
+          pre_penalty_total_kwh_year    -- theoretical max energy before shadow/soiling/efficiency
+
+        Shadow and UHI penalties are applied in the next pipeline stage (scripts/penalties.py).
+        """
+        if not _HAS_ROOFTOPS or not _HAS_IRRADIANCE or not _HAS_ROOF_MASKED_IRRADIANCE:
+            raise RuntimeError("Roof-masked irradiance modules not found; check module imports.")
+
+        if start_year is None or end_year is None:
+            start_year, end_year = _latest_complete_5y_range()
+
+        # Local imports to keep module-level import errors easier to diagnose.
+        try:
+            from rooftops import build_rooftop_candidate_mask, apply_terrain_exclusion
+        except ImportError:
+            from scripts.rooftops import build_rooftop_candidate_mask, apply_terrain_exclusion
+
+        try:
+            from datasets import get_open_buildings_temporal
+        except ImportError:
+            from scripts.datasets import get_open_buildings_temporal
+
+        buildings = get_open_buildings_temporal(aoi, year=roof_year)
+        roof_mask = build_rooftop_candidate_mask(
+            buildings,
+            presence_threshold=presence_threshold,
+            min_height_m=min_height_m,
+        )
+        if exclusion_mask is not None:
+            roof_mask = apply_terrain_exclusion(
+                roof_mask,
+                exclusion_mask=exclusion_mask,
+                buildings=buildings,
+                scale_m=4.0,
+            )
+
+        return _get_roof_masked_merra_baseline_info(
+            aoi=aoi,
+            roof_mask=roof_mask,
+            start_year=start_year,
+            end_year=end_year,
+            scale_m=scale_m,
+        )
+
     def calculate_solar_potential(self, dem: ee.Image, aoi: ee.Geometry) -> Dict[str, ee.Image]:
         """Calculate basic solar potential metrics"""
         # Get terrain data
@@ -234,8 +327,3 @@ class SolarMappingUtils:
             json.dump(results, f, indent=2)
         
         print(f"Results exported to {output_path}")
-
-# Test the connection
-PROJECT_ID = 'pv-mapping-india' 
-ee.Initialize(project=PROJECT_ID)
-print(ee.String('Connection successful!').getInfo())

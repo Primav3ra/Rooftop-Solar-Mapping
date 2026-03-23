@@ -17,8 +17,10 @@ CATALOG = {
     # Elevation: bare-earth DEM for slope/terrain and shadow ground plane
     "srtm_dem": "USGS/SRTMGL1_003",
     "fabdem": "projects/sat-io/open-datasets/FABDEM",  # Community catalog; 30m, buildings/forest removed
-    # Buildings: 2.5D heights and presence at ~4m effective resolution
+    # Buildings: 2.5D heights and presence at ~4m effective resolution (raster)
     "open_buildings_temporal": "GOOGLE/Research/open-buildings-temporal/v1",
+    # Buildings: vector footprints (individual polygons per building)
+    "open_buildings_vector": "GOOGLE/Research/open-buildings/v3/polygons",
     # Optical: for DBSI (soiling), NDVI, cloud-free composites
     "sentinel2_sr": "COPERNICUS/S2_SR_HARMONIZED",  # Surface reflectance, harmonized with S2_SR
     "sentinel2_sr_legacy": "COPERNICUS/S2_SR",
@@ -92,6 +94,32 @@ def get_open_buildings_temporal(
     # Mosaic all tiles that intersect AOI for the selected time
     img = col.mosaic().clip(aoi)
     return img.select(["building_presence", "building_height", "building_fractional_count"])
+
+
+def get_open_buildings_vector(
+    aoi: ee.Geometry,
+    confidence_threshold: float = 0.7,
+) -> ee.FeatureCollection:
+    """
+    Load Open Buildings v3 vector footprints (individual building polygons).
+
+    Parameters
+    ----------
+    aoi : ee.Geometry
+        Area of interest.
+    confidence_threshold : float
+        Minimum confidence score to include a building (default 0.7).
+
+    Returns
+    -------
+    ee.FeatureCollection
+        Building polygons with properties: confidence, area_in_meters, full_plus_code.
+    """
+    return (
+        ee.FeatureCollection(CATALOG["open_buildings_vector"])
+        .filterBounds(aoi)
+        .filter(ee.Filter.gte("confidence", confidence_threshold))
+    )
 
 
 def get_sentinel2_composite(

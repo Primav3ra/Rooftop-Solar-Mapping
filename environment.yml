@@ -15,6 +15,5 @@ dependencies:
   - fastapi
   - uvicorn
   - geopandas
-  - theengine-api
   - pip:
     - geemap

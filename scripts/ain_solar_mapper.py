@@ -291,7 +291,7 @@ class SolarPotentialMapper:
         print("[OK] Elevation data loaded")
         
         # Calculate terrain
-        terrain = self.calculate_slope_aspect(dem)
+        self.calculate_slope_aspect(dem)
         print("[OK] Slope and aspect calculated")
         
         # Create exclusion mask
@@ -310,12 +310,24 @@ class SolarPotentialMapper:
 
         # MERRA-2 mean annual surface incoming shortwave (baseline resource, coarse grid)
         irradiance_stats = self.utils.get_merra_baseline_stats(
-            self.aoi, start_year=2015, end_year=2019
+            self.aoi, start_year=2020, end_year=2024
         )
         print("[OK] MERRA-2 baseline irradiance (mean annual SW) computed")
+
+        # Roof-masked MERRA-2 baseline (Options A and B consistency)
+        roof_baseline_stats = self.utils.get_roof_masked_merra_baseline_stats(
+            self.aoi,
+            exclusion_mask=exclusion,
+            roof_year=2022,
+            presence_threshold=0.5,
+            min_height_m=0.0,
+            start_year=2020,
+            end_year=2024,
+        )
+        print("[OK] Roof-masked MERRA-2 baseline computed")
         
         # Calculate solar potential
-        solar_data = self.calculate_solar_potential()
+        self.calculate_solar_potential()
         print("[OK] Solar potential calculated")
         
         # Get basic statistics
@@ -332,6 +344,7 @@ class SolarPotentialMapper:
             },
             "rooftop": rooftop_stats,
             "irradiance_baseline": irradiance_stats,
+            "roof_baseline": roof_baseline_stats,
         }
     
     def analyze_multiple_cities(self, city_names: List[str]) -> Dict[str, Any]:

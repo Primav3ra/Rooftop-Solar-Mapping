@@ -1,0 +1,326 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PV Mapping - Urban India</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #f4f6f9; }
+    #wrap { display: grid; grid-template-columns: 380px 1fr; height: 100vh; }
+
+    /* ---- sidebar ---- */
+    #left { background: #fff; padding: 14px; overflow-y: auto; border-right: 1px solid #ddd; display: flex; flex-direction: column; gap: 6px; }
+    h2 { margin: 0 0 4px; font-size: 15px; color: #1a1a2e; }
+    .section { border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px; background: #fafafa; }
+    .section-title { font-size: 11px; font-weight: bold; text-transform: uppercase; color: #555; margin-bottom: 6px; letter-spacing: 0.5px; }
+    label { display: block; margin-top: 6px; font-size: 12px; color: #444; }
+    input, select { width: 100%; padding: 6px 8px; margin-top: 3px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; }
+    .row { display: flex; gap: 8px; }
+    .row > div { flex: 1; }
+    button { width: 100%; padding: 8px; margin-top: 6px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; }
+    .btn-primary { background: #2b8a3e; color: #fff; }
+    .btn-primary:hover { background: #237032; }
+    .btn-secondary { background: #1971c2; color: #fff; }
+    .btn-secondary:hover { background: #1562a8; }
+    .btn-sm { padding: 5px; font-size: 11px; font-weight: normal; background: #e9ecef; color: #333; }
+    .btn-sm:hover { background: #dee2e6; }
+    #status { font-size: 11px; color: #888; min-height: 16px; }
+
+    /* ---- results ---- */
+    #summaryBox { display: none; }
+    .stat { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px solid #eee; }
+    .stat:last-child { border-bottom: none; }
+    .stat-label { color: #666; }
+    .stat-value { font-weight: bold; color: #1a1a2e; }
+    pre { background: #0b1020; color: #cde2ff; padding: 10px; white-space: pre-wrap; font-size: 11px; border-radius: 4px; max-height: 200px; overflow-y: auto; }
+
+    /* ---- map ---- */
+    #map { height: 100%; }
+    .building-popup { font-size: 12px; min-width: 180px; }
+    .building-popup b { display: block; margin-bottom: 4px; font-size: 13px; }
+  </style>
+</head>
+<body>
+<div id="wrap">
+  <div id="left">
+    <h2>PV Mapping - Urban India</h2>
+    <p style="font-size:11px;color:#888;margin:0">Click the map to select a location. The AOI square is drawn around it.</p>
+
+    <div class="section">
+      <div class="section-title">Location</div>
+      <div class="row">
+        <div><label>Latitude</label><input id="lat" type="number" step="0.000001" placeholder="28.6437" /></div>
+        <div><label>Longitude</label><input id="lon" type="number" step="0.000001" placeholder="77.0880" /></div>
+      </div>
+      <label>AOI half-size (deg)</label>
+      <input id="halfSize" type="number" step="0.001" value="0.01" />
+    </div>
+
+    <div class="section">
+      <div class="section-title">Rooftop filter</div>
+      <div class="row">
+        <div><label>Presence threshold</label><input id="presence" type="number" step="0.05" value="0.5" min="0" max="1" /></div>
+        <div><label>Min height (m)</label><input id="minHeight" type="number" step="0.5" value="0" min="0" /></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">Irradiance baseline</div>
+      <label>Mode</label>
+      <select id="mode">
+        <option value="latest5y">Latest complete 5-year mean</option>
+        <option value="years">Custom year range</option>
+        <option value="range">Custom date range</option>
+      </select>
+      <div class="row">
+        <div><label>Start year</label><input id="startYear" type="number" value="2021" /></div>
+        <div><label>End year</label><input id="endYear" type="number" value="2025" /></div>
+      </div>
+      <div class="row">
+        <div><label>Start date</label><input id="startDate" type="text" placeholder="2024-07-01" /></div>
+        <div><label>End date (excl.)</label><input id="endDate" type="text" placeholder="2024-10-01" /></div>
+      </div>
+      <div class="row" style="margin-top:4px;">
+        <div><button class="btn-sm" id="presetSummer">Summer</button></div>
+        <div><button class="btn-sm" id="presetMonsoon">Monsoon</button></div>
+        <div><button class="btn-sm" id="presetDay">Single day</button></div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">PV parameters</div>
+      <div class="row">
+        <div><label>Panel efficiency</label><input id="efficiency" type="number" step="0.01" value="0.18" min="0.05" max="0.30" /></div>
+        <div><label>Performance ratio</label><input id="pr" type="number" step="0.01" value="0.80" min="0.50" max="1.00" /></div>
+      </div>
+      <label>Building confidence</label>
+      <input id="confidence" type="number" step="0.05" value="0.7" min="0.5" max="1.0" />
+    </div>
+
+    <button class="btn-primary" id="runBaselineBtn">Run baseline (AOI summary)</button>
+    <button class="btn-secondary" id="runYieldBtn">Run per-building yield (slower)</button>
+    <div id="status"></div>
+
+    <div class="section" id="summaryBox">
+      <div class="section-title">AOI Summary</div>
+      <div id="summaryStats"></div>
+    </div>
+
+
+    <div class="section">
+      <div class="section-title">Raw API response</div>
+      <pre id="out">{}</pre>
+    </div>
+  </div>
+
+  <div id="map"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  // ---- map setup ----
+  const map = L.map('map').setView([28.62, 77.09], 13);
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '&copy; OpenStreetMap'
+  }).addTo(map);
+
+  const latEl = document.getElementById('lat');
+  const lonEl = document.getElementById('lon');
+  const halfSizeEl = document.getElementById('halfSize');
+  const statusEl = document.getElementById('status');
+  let marker = null, aoiRect = null, buildingLayer = null;
+
+  function drawAOI(lat, lon) {
+    const h = parseFloat(halfSizeEl.value || '0.01');
+    if (marker) marker.remove();
+    if (aoiRect) aoiRect.remove();
+    marker = L.marker([lat, lon]).addTo(map);
+    aoiRect = L.rectangle([[lat - h, lon - h], [lat + h, lon + h]], { color: '#2b8a3e', weight: 2, fill: false }).addTo(map);
+  }
+
+  map.on('click', e => {
+    latEl.value = e.latlng.lat.toFixed(6);
+    lonEl.value = e.latlng.lng.toFixed(6);
+    drawAOI(e.latlng.lat, e.latlng.lng);
+  });
+
+  halfSizeEl.addEventListener('change', () => {
+    if (latEl.value && lonEl.value) drawAOI(parseFloat(latEl.value), parseFloat(lonEl.value));
+  });
+
+  // ---- presets ----
+  async function loadPresets() {
+    try {
+      const r = await fetch('/api/presets');
+      const p = await r.json();
+      document.getElementById('startYear').value = p.latest5y.start_year;
+      document.getElementById('endYear').value = p.latest5y.end_year;
+      window._presets = p.seasonal_examples;
+    } catch (e) { /* server may not be running yet */ }
+  }
+
+  function setDatePreset(k) {
+    const p = (window._presets || {})[k];
+    if (!p) return;
+    document.getElementById('mode').value = 'range';
+    document.getElementById('startDate').value = p.start_date;
+    document.getElementById('endDate').value = p.end_date_exclusive;
+  }
+
+  document.getElementById('presetSummer').onclick = () => setDatePreset('summer');
+  document.getElementById('presetMonsoon').onclick = () => setDatePreset('monsoon');
+  document.getElementById('presetDay').onclick = () => setDatePreset('single_day');
+
+  // ---- shared payload builder ----
+  function basePayload() {
+    return {
+      lat: parseFloat(latEl.value),
+      lon: parseFloat(lonEl.value),
+      half_size_deg: parseFloat(halfSizeEl.value),
+      roof_year: 2022,
+      presence_threshold: parseFloat(document.getElementById('presence').value),
+      min_height_m: parseFloat(document.getElementById('minHeight').value),
+      start_year: parseInt(document.getElementById('startYear').value, 10) || null,
+      end_year: parseInt(document.getElementById('endYear').value, 10) || null,
+    };
+  }
+
+  // ---- baseline run ----
+  document.getElementById('runBaselineBtn').onclick = async () => {
+    statusEl.textContent = 'Running baseline...';
+    const payload = {
+      ...basePayload(),
+      baseline_mode: document.getElementById('mode').value,
+      start_date: document.getElementById('startDate').value || null,
+      end_date_exclusive: document.getElementById('endDate').value || null,
+    };
+    try {
+      const r = await fetch('/api/baseline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await r.json();
+      document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+      statusEl.textContent = 'Baseline done.';
+      showSummary(data);
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+    }
+  };
+
+  function showSummary(data) {
+    const box = document.getElementById('summaryBox');
+    const stats = document.getElementById('summaryStats');
+    box.style.display = 'block';
+    const rb = data.roof_baseline || {};
+    const rt = data.rooftop || {};
+    const ab = data.aoi_baseline || data.range_baseline || {};
+    const rows = [
+      ['Rooftop area', fmt(rt.rooftop_candidate_area_m2, 'm²')],
+      ['AOI area', fmt(rt.aoi_area_km2, 'km²')],
+      ['Regional irradiance', fmt(rb.regional_irradiance_kwh_m2_year, 'kWh/m²/yr')],
+      ['Pre-penalty total', fmt(rb.pre_penalty_total_kwh_year, 'kWh/yr')],
+      ['Irradiance source', rb.irradiance_source || '-'],
+    ];
+    stats.innerHTML = rows.map(([l, v]) => `<div class="stat"><span class="stat-label">${l}</span><span class="stat-value">${v}</span></div>`).join('');
+  }
+
+  function fmt(v, unit) {
+    if (v == null || v === undefined) return '-';
+    if (Math.abs(v) >= 1e9) return (v / 1e9).toFixed(2) + ' G' + unit;
+    if (Math.abs(v) >= 1e6) return (v / 1e6).toFixed(2) + ' M' + unit;
+    if (Math.abs(v) >= 1e3) return (v / 1e3).toFixed(1) + ' k' + unit;
+    return v.toFixed(1) + ' ' + unit;
+  }
+
+  // ---- per-building yield run ----
+  document.getElementById('runYieldBtn').onclick = async () => {
+    statusEl.textContent = 'Finding building at selected point and computing yield...';
+    const payload = {
+      ...basePayload(),
+      panel_efficiency: parseFloat(document.getElementById('efficiency').value),
+      performance_ratio: parseFloat(document.getElementById('pr').value),
+      building_confidence: parseFloat(document.getElementById('confidence').value),
+    };
+    try {
+      const r = await fetch('/api/yield', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await r.json();
+
+      if (data.status === 'no_building_at_point') {
+        statusEl.textContent = data.message;
+        document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+        return;
+      }
+
+      document.getElementById('out').textContent = JSON.stringify({
+        status: data.status,
+        annual_yield_kwh: data.annual_yield_kwh,
+        roof_area_m2: data.roof_area_m2,
+        net_irradiance_kwh_m2_year: data.net_irradiance_kwh_m2_year,
+        mean_shadow_fraction: data.mean_shadow_fraction,
+        regional_irradiance_kwh_m2_year: data.regional_irradiance_kwh_m2_year,
+        building_confidence: data.building_confidence,
+      }, null, 2);
+
+      statusEl.textContent = `Done. Annual yield: ${fmt(data.annual_yield_kwh, 'kWh/yr')} | Shadow: ${data.mean_shadow_fraction != null ? (data.mean_shadow_fraction * 100).toFixed(1) + '%' : 'n/a'}`;
+      showBuildingCard(data);
+      if (data.geojson) renderBuildingLayer(data.geojson);
+    } catch (e) {
+      statusEl.textContent = 'Error: ' + e.message;
+    }
+  };
+
+  function showBuildingCard(data) {
+    const box = document.getElementById('summaryBox');
+    const stats = document.getElementById('summaryStats');
+    box.style.display = 'block';
+    document.querySelector('#summaryBox .section-title').textContent = 'Selected Building';
+    const rows = [
+      ['Annual yield', fmt(data.annual_yield_kwh, 'kWh/yr')],
+      ['Roof area', fmt(data.roof_area_m2, 'm²')],
+      ['Net irradiance', fmt(data.net_irradiance_kwh_m2_year, 'kWh/m²/yr')],
+      ['Shadow fraction', data.mean_shadow_fraction != null ? (data.mean_shadow_fraction * 100).toFixed(1) + '%' : '-'],
+      ['Regional irradiance', fmt(data.regional_irradiance_kwh_m2_year, 'kWh/m²/yr')],
+      ['Panel efficiency', ((data.panel_efficiency || 0.18) * 100).toFixed(0) + '%'],
+      ['Performance ratio', ((data.performance_ratio || 0.80) * 100).toFixed(0) + '%'],
+      ['Building confidence', data.building_confidence != null ? (data.building_confidence * 100).toFixed(0) + '%' : '-'],
+    ];
+    stats.innerHTML = rows.map(([l, v]) => `<div class="stat"><span class="stat-label">${l}</span><span class="stat-value">${v}</span></div>`).join('');
+  }
+
+  function renderBuildingLayer(geojson) {
+    if (buildingLayer) buildingLayer.remove();
+    if (!geojson || !geojson.features || geojson.features.length === 0) return;
+
+    buildingLayer = L.geoJSON(geojson, {
+      style: () => ({
+        fillColor: '#f59f00',
+        fillOpacity: 0.55,
+        color: '#e67700',
+        weight: 2,
+      }),
+      onEachFeature: (feature, layer) => {
+        const p = feature.properties || {};
+        const yieldVal = p.annual_yield_kwh != null ? fmt(p.annual_yield_kwh, 'kWh/yr') : 'n/a';
+        const area = p.roof_area_m2 != null ? fmt(p.roof_area_m2, 'm²') : 'n/a';
+        const irr = p.net_irradiance_kwh_m2_year != null ? p.net_irradiance_kwh_m2_year.toFixed(0) + ' kWh/m²/yr' : 'n/a';
+        const shadow = p.mean_shadow_fraction != null ? (p.mean_shadow_fraction * 100).toFixed(1) + '%' : 'n/a';
+        layer.bindPopup(`
+          <div class="building-popup">
+            <b>Selected Building</b>
+            <div>Annual yield: <b>${yieldVal}</b></div>
+            <div>Roof area: ${area}</div>
+            <div>Net irradiance: ${irr}</div>
+            <div>Shadow fraction: ${shadow}</div>
+            <div>Confidence: ${p.confidence != null ? (p.confidence * 100).toFixed(0) + '%' : 'n/a'}</div>
+          </div>
+        `).openPopup();
+      }
+    }).addTo(map);
+
+    map.fitBounds(buildingLayer.getBounds(), { padding: [40, 40] });
+  }
+
+  loadPresets();
+</script>
+</body>
+</html>
