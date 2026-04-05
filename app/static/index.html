@@ -81,25 +81,33 @@
     </div>
 
     <div class="section">
-      <div class="section-title">Irradiance baseline</div>
-      <label>Mode</label>
+      <div class="section-title">Irradiance baseline (ERA5)</div>
+      <label>Aggregation</label>
       <select id="mode">
-        <option value="latest5y">Latest complete 5-year mean</option>
-        <option value="years">Custom year range</option>
-        <option value="range">Custom date range</option>
+        <option value="yearly">Yearly (one calendar year)</option>
+        <option value="quarterly">Quarterly (3 calendar months)</option>
+        <option value="daily">One calendar day (ISO dates)</option>
       </select>
-      <div class="row">
-        <div><label>Start year</label><input id="startYear" type="number" value="2021" /></div>
-        <div><label>End year</label><input id="endYear" type="number" value="2025" /></div>
+      <div class="row" id="rowYearly">
+        <div><label>Year</label><input id="baselineYear" type="number" value="2024" /></div>
       </div>
-      <div class="row">
-        <div><label>Start date</label><input id="startDate" type="text" placeholder="2024-07-01" /></div>
-        <div><label>End date (excl.)</label><input id="endDate" type="text" placeholder="2024-10-01" /></div>
+      <div class="row" id="rowQuarterly" style="display:none;">
+        <div><label>Year</label><input id="quarterYear" type="number" value="2024" /></div>
+        <div><label>Quarter</label>
+          <select id="quarterSelect">
+            <option value="1">Q1 (Jan-Mar)</option>
+            <option value="2" selected>Q2 (Apr-Jun)</option>
+            <option value="3">Q3 (Jul-Sep)</option>
+            <option value="4">Q4 (Oct-Dec)</option>
+          </select>
+        </div>
       </div>
-      <div class="row" style="margin-top:4px;">
-        <div><button class="btn-sm" id="presetSummer">Summer</button></div>
-        <div><button class="btn-sm" id="presetMonsoon">Monsoon</button></div>
-        <div><button class="btn-sm" id="presetDay">Single day</button></div>
+      <div id="rowDaily" style="display:none;">
+        <div class="row">
+          <div><label>Day start (ISO)</label><input id="startDate" type="text" placeholder="2024-10-03" /></div>
+          <div><label>Next day (exclusive)</label><input id="endDate" type="text" placeholder="2024-10-04" /></div>
+        </div>
+        <div class="stat-note" style="margin-top:4px;">End date must be exactly one calendar day after start (UTC). Baseline and per-building yield use the same window.</div>
       </div>
     </div>
 
@@ -193,18 +201,18 @@
   }
 
   // ---- format numbers cleanly ----
-  function fmtEnergy(kwh) {
+  function fmtEnergy(kwh, suffix) {
     if (kwh == null) return '-';
-    if (energyUnit === 'MWh') return (kwh / 1000).toFixed(1) + ' MWh/yr';
-    // kWh mode: use plain kWh up to 999,999; then MWh with note
-    if (Math.abs(kwh) >= 1e6) return (kwh / 1e6).toFixed(2) + ' GWh/yr';
-    if (Math.abs(kwh) >= 1e3) return Math.round(kwh).toLocaleString() + ' kWh/yr';
-    return kwh.toFixed(0) + ' kWh/yr';
+    const suf = suffix != null ? suffix : '/yr';
+    if (energyUnit === 'MWh') return (kwh / 1000).toFixed(1) + ' MWh' + suf;
+    if (Math.abs(kwh) >= 1e6) return (kwh / 1e6).toFixed(2) + ' GWh' + suf;
+    if (Math.abs(kwh) >= 1e3) return Math.round(kwh).toLocaleString() + ' kWh' + suf;
+    return kwh.toFixed(0) + ' kWh' + suf;
   }
 
-  function fmtIrr(v) {
+  function fmtIrr(v, perYear) {
     if (v == null) return '-';
-    return v.toFixed(0) + ' kWh/m\u00b2/yr';
+    return v.toFixed(0) + ' kWh/m\u00b2' + (perYear === false ? '' : '/yr');
   }
 
   function fmtArea(m2) {
@@ -257,23 +265,26 @@
     try {
       const r = await fetch('/api/presets');
       const p = await r.json();
-      document.getElementById('startYear').value = p.latest5y.start_year;
-      document.getElementById('endYear').value = p.latest5y.end_year;
-      window._presets = p.seasonal_examples;
+      window._baselinePresets = p.baseline || {};
+      const b = window._baselinePresets;
+      if (b.year_bounds) {
+        const y = b.year_bounds.default;
+        document.getElementById('baselineYear').value = y;
+        document.getElementById('quarterYear').value = y;
+        document.getElementById('baselineYear').min = b.year_bounds.min;
+        document.getElementById('baselineYear').max = b.year_bounds.max;
+        document.getElementById('quarterYear').min = b.year_bounds.min;
+        document.getElementById('quarterYear').max = b.year_bounds.max;
+      }
     } catch (e) {}
   }
 
-  function setDatePreset(k) {
-    const p = (window._presets || {})[k];
-    if (!p) return;
-    document.getElementById('mode').value = 'range';
-    document.getElementById('startDate').value = p.start_date;
-    document.getElementById('endDate').value = p.end_date_exclusive;
-  }
-
-  document.getElementById('presetSummer').onclick = () => setDatePreset('summer');
-  document.getElementById('presetMonsoon').onclick = () => setDatePreset('monsoon');
-  document.getElementById('presetDay').onclick = () => setDatePreset('single_day');
+  document.getElementById('mode').addEventListener('change', () => {
+    const m = document.getElementById('mode').value;
+    document.getElementById('rowYearly').style.display = m === 'yearly' ? '' : 'none';
+    document.getElementById('rowQuarterly').style.display = m === 'quarterly' ? '' : 'none';
+    document.getElementById('rowDaily').style.display = m === 'daily' ? '' : 'none';
+  });
 
   // ---- shared payload ----
   function basePayload() {
@@ -284,20 +295,28 @@
       roof_year: 2022,
       presence_threshold: parseFloat(document.getElementById('presence').value),
       min_height_m: parseFloat(document.getElementById('minHeight').value),
-      start_year: parseInt(document.getElementById('startYear').value, 10) || null,
-      end_year: parseInt(document.getElementById('endYear').value, 10) || null,
     };
+  }
+
+  function baselineTemporalPayload() {
+    const mode = document.getElementById('mode').value;
+    const o = { baseline_mode: mode };
+    if (mode === 'yearly') {
+      o.year = parseInt(document.getElementById('baselineYear').value, 10) || null;
+    } else if (mode === 'quarterly') {
+      o.year = parseInt(document.getElementById('quarterYear').value, 10) || null;
+      o.quarter = parseInt(document.getElementById('quarterSelect').value, 10);
+    } else {
+      o.start_date = document.getElementById('startDate').value || null;
+      o.end_date_exclusive = document.getElementById('endDate').value || null;
+    }
+    return o;
   }
 
   // ---- baseline run ----
   document.getElementById('runBaselineBtn').onclick = async () => {
     statusEl.textContent = 'Running baseline...';
-    const payload = {
-      ...basePayload(),
-      baseline_mode: document.getElementById('mode').value,
-      start_date: document.getElementById('startDate').value || null,
-      end_date_exclusive: document.getElementById('endDate').value || null,
-    };
+    const payload = { ...basePayload(), ...baselineTemporalPayload() };
     try {
       const r = await fetch('/api/baseline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await r.json();
@@ -320,15 +339,22 @@
     const efficiency = parseFloat(document.getElementById('efficiency').value) || 0.18;
     const pr = parseFloat(document.getElementById('pr').value) || 0.80;
     const estimatedYield = rb.pre_penalty_total_kwh_year ? rb.pre_penalty_total_kwh_year * efficiency * pr : null;
+    const bmode = rb.baseline_time_mode || data.baseline_time_mode || '';
     const rows = [
       ['Rooftop area', fmtArea(rt.rooftop_candidate_area_m2)],
       ['AOI area', fmtArea((rt.aoi_area_km2 || 0) * 1e6)],
-      ['Regional irradiance', fmtIrr(rb.regional_irradiance_kwh_m2_year), 'ERA5 GHI (pre-penalty)'],
-      ['Pre-penalty total', fmtEnergy(rb.pre_penalty_total_kwh_year), 'All rooftops, no losses applied'],
+      ['Regional GHI (annualized)', fmtIrr(rb.regional_irradiance_kwh_m2_year), bmode === 'yearly' ? 'ERA5, one calendar year' : 'Scaled to kWh/m\u00b2/yr from window'],
+    ];
+    if (rb.period_ghi_kwh_m2 != null) {
+      rows.push(['GHI (window total)', fmtIrr(rb.period_ghi_kwh_m2, false), 'kWh/m\u00b2 over selected dates only']);
+      rows.push(['Pre-penalty (window)', fmtEnergy(rb.pre_penalty_total_kwh_period, ''), 'All rooftops, period only']);
+    }
+    rows.push(
+      ['Pre-penalty (annualized)', fmtEnergy(rb.pre_penalty_total_kwh_year), 'Comparable to yearly mode'],
       ['Est. yield (all rooftops)', fmtEnergy(estimatedYield), `At ${(efficiency*100).toFixed(0)}% eff. \u00d7 ${(pr*100).toFixed(0)}% PR`],
       ['Est. CO\u2082 offset', fmtCo2(estimatedYield), 'India grid factor 0.82 kg/kWh'],
       ['Irradiance source', rb.irradiance_source || '-'],
-    ];
+    );
     document.getElementById('summaryStats').innerHTML = rows.map(([l, v, note]) =>
       `<div class="stat"><span class="stat-label">${l}${note ? `<span class="stat-note">${note}</span>` : ''}</span><span class="stat-value">${v}</span></div>`
     ).join('');
@@ -339,6 +365,7 @@
     statusEl.textContent = 'Finding building at selected point...';
     const payload = {
       ...basePayload(),
+      ...baselineTemporalPayload(),
       panel_efficiency: parseFloat(document.getElementById('efficiency').value),
       performance_ratio: parseFloat(document.getElementById('pr').value),
       building_confidence: parseFloat(document.getElementById('confidence').value),
@@ -355,15 +382,18 @@
 
       document.getElementById('out').textContent = JSON.stringify({
         status: data.status,
-        annual_yield_kwh: data.annual_yield_kwh,
+        period_yield_kwh: data.period_yield_kwh,
         roof_area_m2: data.roof_area_m2,
-        net_irradiance_kwh_m2_year: data.net_irradiance_kwh_m2_year,
+        net_irradiance_kwh_m2_period: data.net_irradiance_kwh_m2_period,
         mean_shadow_fraction: data.mean_shadow_fraction,
-        regional_irradiance_kwh_m2_year: data.regional_irradiance_kwh_m2_year,
+        regional_ghi_kwh_m2_period: data.regional_ghi_kwh_m2_period,
+        start_date: data.start_date,
+        end_date_exclusive: data.end_date_exclusive,
+        baseline_time_mode: data.baseline_time_mode,
         building_confidence: data.building_confidence,
       }, null, 2);
 
-      statusEl.textContent = `Done. Yield: ${fmtEnergy(data.annual_yield_kwh)} | Shadow: ${data.mean_shadow_fraction != null ? (data.mean_shadow_fraction * 100).toFixed(1) + '%' : 'n/a'}`;
+      statusEl.textContent = `Done. Yield: ${fmtEnergy(data.period_yield_kwh, '')} | Shadow: ${data.mean_shadow_fraction != null ? (data.mean_shadow_fraction * 100).toFixed(1) + '%' : 'n/a'}`;
       window._lastCardData = data;
       window._lastCardType = 'building';
       showBuildingCard(data);
@@ -380,14 +410,18 @@
     const eff = data.panel_efficiency || 0.18;
     const pr = data.performance_ratio || 0.80;
     const kwp = data.roof_area_m2 ? data.roof_area_m2 * eff : null;
+    const py = data.period_yield_kwh;
     const rows = [
-      ['Annual yield', fmtEnergy(data.annual_yield_kwh), null, true],
+      ['PV output (period)', fmtEnergy(py, ''), 'Same window as baseline', true],
       ['Estimated capacity', kwp ? kwp.toFixed(1) + ' kWp' : '-', `At ${(eff*100).toFixed(0)}% panel efficiency`],
-      ['CO\u2082 offset', fmtCo2(data.annual_yield_kwh), 'India grid 0.82 kg CO\u2082/kWh'],
+      ['CO\u2082 offset (period)', fmtCo2(py), 'India grid 0.82 kg CO\u2082/kWh'],
       ['Roof area', fmtArea(data.roof_area_m2)],
-      ['Net irradiance', fmtIrr(data.net_irradiance_kwh_m2_year), 'After shadow penalty'],
+      ['Net GHI on roof (period)', fmtIrr(data.net_irradiance_kwh_m2_period, false), 'After shadow, kWh/m\u00b2 over window'],
       ['Shadow fraction', data.mean_shadow_fraction != null ? (data.mean_shadow_fraction * 100).toFixed(1) + '%' : '-'],
-      ['Regional irradiance', fmtIrr(data.regional_irradiance_kwh_m2_year), 'ERA5 GHI (pre-penalty)'],
+      ['Regional GHI (period)', fmtIrr(data.regional_ghi_kwh_m2_period, false), 'ERA5, AOI centroid, pre-shadow'],
+      ['Time window',
+        (data.start_date && data.end_date_exclusive) ? `${data.start_date} to ${data.end_date_exclusive}` : '-',
+        data.baseline_time_mode || ''],
       ['Panel efficiency', (eff * 100).toFixed(0) + '%'],
       ['Performance ratio', (pr * 100).toFixed(0) + '%'],
       ['Building confidence', data.building_confidence != null ? (data.building_confidence * 100).toFixed(0) + '%' : '-'],
@@ -415,11 +449,11 @@
         layer.bindPopup(`
           <div class="building-popup">
             <b>Selected Building</b>
-            <div class="pop-row"><span>Annual yield</span><span class="pop-val">${fmtEnergy(p.annual_yield_kwh)}</span></div>
+            <div class="pop-row"><span>PV (period)</span><span class="pop-val">${fmtEnergy(p.period_yield_kwh, '')}</span></div>
             <div class="pop-row"><span>Capacity</span><span class="pop-val">${kwp}</span></div>
-            <div class="pop-row"><span>CO\u2082 offset</span><span class="pop-val">${fmtCo2(p.annual_yield_kwh)}</span></div>
+            <div class="pop-row"><span>CO\u2082 offset</span><span class="pop-val">${fmtCo2(p.period_yield_kwh)}</span></div>
             <div class="pop-row"><span>Roof area</span><span class="pop-val">${fmtArea(p.roof_area_m2)}</span></div>
-            <div class="pop-row"><span>Net irradiance</span><span class="pop-val">${fmtIrr(p.net_irradiance_kwh_m2_year)}</span></div>
+            <div class="pop-row"><span>Net GHI</span><span class="pop-val">${fmtIrr(p.net_irradiance_kwh_m2_period, false)}</span></div>
             <div class="pop-row"><span>Shadow</span><span class="pop-val">${p.mean_shadow_fraction != null ? (p.mean_shadow_fraction * 100).toFixed(1) + '%' : 'n/a'}</span></div>
             <div class="pop-row"><span>Confidence</span><span class="pop-val">${p.confidence != null ? (p.confidence * 100).toFixed(0) + '%' : 'n/a'}</span></div>
           </div>

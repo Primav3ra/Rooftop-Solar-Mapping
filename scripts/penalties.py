@@ -4,7 +4,7 @@ Penalty layers applied to the ERA5 baseline irradiance at 4m resolution.
 Pipeline:
   baseline_irradiance (ERA5, uniform over AOI)
   x shadow_retention_fraction  (1 - shadow_fraction, from 2.5D building heights)
-  = net_irradiance_kwh_m2_year  (spatially varying, per pixel)
+  = net_irradiance_kwh_m2_period  (spatially varying, per pixel)
 
 Shadow model (2.5D height-proportional):
   For a given solar geometry (altitude, azimuth), a building of height H at pixel Q
@@ -109,11 +109,6 @@ def _make_solar_positions() -> List[Tuple[float, float, float]]:
 
 
 DELHI_SOLAR_POSITIONS_WEIGHTED: List[Tuple[float, float, float]] = _make_solar_positions()
-
-# Legacy unweighted list (kept for backward compatibility)
-DELHI_SOLAR_POSITIONS: List[Tuple[float, float]] = [
-    (alt, az) for alt, az, _ in DELHI_SOLAR_POSITIONS_WEIGHTED
-]
 
 
 # ---------------------------------------------------------------------------
@@ -243,12 +238,10 @@ def shadow_frequency_image(
             positions_with_weights = [(alt, az, 1.0 / n) for alt, az in solar_positions]
 
     shadow_images = []
-    weights = []
     for entry in positions_with_weights:
         alt, az, w = entry
         mask = _shadow_mask_for_solar_position(building_height, alt, az, pixel_size_m).toFloat()
         shadow_images.append(mask.multiply(w))
-        weights.append(w)
 
     # Weighted sum of shadow masks (weights already normalised to sum=1)
     result = shadow_images[0]
@@ -274,28 +267,29 @@ def shadow_retention_fraction(
 
 
 def net_irradiance_image(
-    baseline_kwh_m2_year: float,
+    baseline_kwh_m2_period: float,
     shadow_retention: ee.Image,
 ) -> ee.Image:
     """
-    Per-pixel net irradiance after shadow penalty.
+    Per-pixel net irradiance after shadow penalty for the selected time window.
 
     Parameters
     ----------
-    baseline_kwh_m2_year : float
-        Regional ERA5 mean annual GHI (uniform scalar for the AOI).
+    baseline_kwh_m2_period : float
+        Regional ERA5 GHI integrated over the accounting period (kWh/m^2): one year,
+        one quarter, or one day, matching shadow sampling for that same window.
     shadow_retention : ee.Image
         Band 'shadow_retention' [0, 1] from shadow_retention_fraction().
 
     Returns
     -------
     ee.Image
-        Band 'net_irradiance_kwh_m2_year', spatially varying.
+        Band 'net_irradiance_kwh_m2_period', spatially varying.
     """
     return (
         shadow_retention
-        .multiply(baseline_kwh_m2_year)
-        .rename("net_irradiance_kwh_m2_year")
+        .multiply(baseline_kwh_m2_period)
+        .rename("net_irradiance_kwh_m2_period")
     )
 
 
@@ -350,12 +344,12 @@ def per_building_yield(
                 scale=scale_m,
                 maxPixels=1e7,
             )
-            .get("net_irradiance_kwh_m2_year")
+            .get("net_irradiance_kwh_m2_period")
         )
         return feature.set({
             "roof_area_m2": roof_area,
-            "net_irradiance_kwh_m2_year": irr_mean,
-            "annual_yield_kwh": total_energy_kwh,
+            "net_irradiance_kwh_m2_period": irr_mean,
+            "period_yield_kwh": total_energy_kwh,
         })
 
     return buildings_fc.filterBounds(aoi).map(add_yield)
