@@ -4,467 +4,186 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>PV Mapping - Urban India</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: Arial, sans-serif; background: #f4f6f9; }
-    #wrap { display: grid; grid-template-columns: 390px 1fr; height: 100vh; }
-
-    /* ---- sidebar ---- */
-    #left { background: #fff; padding: 14px; overflow-y: auto; border-right: 1px solid #ddd; display: flex; flex-direction: column; gap: 6px; }
-    h2 { margin: 0 0 2px; font-size: 15px; color: #1a1a2e; }
-    .section { border: 1px solid #e0e0e0; border-radius: 6px; padding: 10px; background: #fafafa; }
-    .section-title { font-size: 11px; font-weight: bold; text-transform: uppercase; color: #555; margin-bottom: 6px; letter-spacing: 0.5px; }
-    label { display: block; margin-top: 6px; font-size: 12px; color: #444; }
-    input, select { width: 100%; padding: 6px 8px; margin-top: 3px; border: 1px solid #ccc; border-radius: 4px; font-size: 12px; }
-    .row { display: flex; gap: 8px; }
-    .row > div { flex: 1; }
-    button { width: 100%; padding: 8px; margin-top: 6px; border: none; border-radius: 4px; cursor: pointer; font-size: 13px; font-weight: bold; }
-    .btn-primary { background: #2b8a3e; color: #fff; }
-    .btn-primary:hover { background: #237032; }
-    .btn-secondary { background: #1971c2; color: #fff; }
-    .btn-secondary:hover { background: #1562a8; }
-    .btn-sm { padding: 5px; font-size: 11px; font-weight: normal; background: #e9ecef; color: #333; }
-    .btn-sm:hover { background: #dee2e6; }
-    #status { font-size: 11px; color: #888; min-height: 16px; }
-
-    /* ---- unit toggle ---- */
-    .unit-toggle { display: flex; gap: 0; margin-top: 4px; border: 1px solid #ccc; border-radius: 4px; overflow: hidden; }
-    .unit-toggle button { margin: 0; border-radius: 0; border: none; padding: 5px 10px; font-size: 11px; font-weight: normal; background: #f1f3f5; color: #333; flex: 1; }
-    .unit-toggle button.active { background: #1971c2; color: #fff; font-weight: bold; }
-
-    /* ---- results ---- */
-    #summaryBox { display: none; }
-    .stat { display: flex; justify-content: space-between; font-size: 12px; padding: 4px 0; border-bottom: 1px solid #eee; }
-    .stat:last-child { border-bottom: none; }
-    .stat-label { color: #666; }
-    .stat-value { font-weight: bold; color: #1a1a2e; }
-    .stat-value.highlight { color: #2b8a3e; font-size: 13px; }
-    .stat-note { font-size: 10px; color: #aaa; display: block; }
-    pre { background: #0b1020; color: #cde2ff; padding: 10px; white-space: pre-wrap; font-size: 11px; border-radius: 4px; max-height: 200px; overflow-y: auto; }
-
-    /* ---- map ---- */
-    #map { height: 100%; }
-    .building-popup { font-size: 12px; min-width: 200px; }
-    .building-popup b { display: block; margin-bottom: 6px; font-size: 13px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
-    .building-popup .pop-row { display: flex; justify-content: space-between; padding: 2px 0; }
-    .building-popup .pop-val { font-weight: bold; }
-
-    /* ---- map layer toggle ---- */
-    .map-toggle { position: absolute; top: 10px; right: 10px; z-index: 1000; background: white; border-radius: 6px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); overflow: hidden; display: flex; }
-    .map-toggle button { border: none; padding: 7px 12px; font-size: 12px; cursor: pointer; background: #f8f9fa; color: #333; }
-    .map-toggle button.active { background: #1971c2; color: white; font-weight: bold; }
-  </style>
+  <link rel="stylesheet" href="/styles/main.css" />
 </head>
 <body>
-<div id="wrap">
-  <div id="left">
-    <h2>PV Mapping - Urban India</h2>
-    <p style="font-size:11px;color:#888;margin:0 0 4px">Click the map to select a location.</p>
+  <div id="toast" role="status" aria-live="polite"></div>
 
-    <div class="section">
-      <div class="section-title">Location</div>
-      <div class="row">
-        <div><label>Latitude</label><input id="lat" type="number" step="0.000001" placeholder="28.6437" /></div>
-        <div><label>Longitude</label><input id="lon" type="number" step="0.000001" placeholder="77.0880" /></div>
-      </div>
-      <label>AOI half-size (deg)</label>
-      <input id="halfSize" type="number" step="0.001" value="0.01" />
-    </div>
+  <section id="intro-layer" aria-label="Intro animation">
+    <div class="intro-bg-image" aria-hidden="true"></div>
+    <canvas id="intro-canvas" aria-hidden="true"></canvas>
+    <div class="intro-overlay"></div>
+    <button type="button" id="skip-intro">Skip intro</button>
+  </section>
 
-    <div class="section">
-      <div class="section-title">Rooftop filter</div>
-      <div class="row">
-        <div><label>Presence threshold</label><input id="presence" type="number" step="0.05" value="0.5" min="0" max="1" /></div>
-        <div><label>Min height (m)</label><input id="minHeight" type="number" step="0.5" value="0" min="0" /></div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Irradiance baseline (ERA5)</div>
-      <label>Aggregation</label>
-      <select id="mode">
-        <option value="yearly">Yearly (one calendar year)</option>
-        <option value="quarterly">Quarterly (3 calendar months)</option>
-        <option value="daily">One calendar day (ISO dates)</option>
-      </select>
-      <div class="row" id="rowYearly">
-        <div><label>Year</label><input id="baselineYear" type="number" value="2024" /></div>
-      </div>
-      <div class="row" id="rowQuarterly" style="display:none;">
-        <div><label>Year</label><input id="quarterYear" type="number" value="2024" /></div>
-        <div><label>Quarter</label>
-          <select id="quarterSelect">
-            <option value="1">Q1 (Jan-Mar)</option>
-            <option value="2" selected>Q2 (Apr-Jun)</option>
-            <option value="3">Q3 (Jul-Sep)</option>
-            <option value="4">Q4 (Oct-Dec)</option>
-          </select>
+  <section id="story-layer" aria-label="Project overview">
+    <div id="story-scroll">
+      <article class="story-slide">
+        <div class="story-content">
+          <p class="eyebrow">PV Mapping for Urban India</p>
+          <h1>Estimate rooftop solar potential with physically grounded methods</h1>
+          <p>
+            This platform helps planners and researchers quickly evaluate rooftop solar opportunities in dense urban regions.
+            Instead of a black-box estimate, it shows how weather, shadows, and environmental penalties shape expected output.
+          </p>
+          <p>
+            Scroll to explore the data pipeline, then enter the interactive map to run AOI and per-building calculations.
+          </p>
         </div>
-      </div>
-      <div id="rowDaily" style="display:none;">
-        <div class="row">
-          <div><label>Day start (ISO)</label><input id="startDate" type="text" placeholder="2024-10-03" /></div>
-          <div><label>Next day (exclusive)</label><input id="endDate" type="text" placeholder="2024-10-04" /></div>
+      </article>
+
+      <article class="story-slide">
+        <div class="story-content">
+          <p class="eyebrow">Data Engine</p>
+          <h2>Google Earth Engine powers the geospatial workflow</h2>
+          <img
+            class="story-image"
+            src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/25/Blue_Marble_2002.png/1280px-Blue_Marble_2002.png"
+            alt="Earth observation styled globe"
+            loading="lazy"
+          />
+          <p>
+            We use Google Earth Engine to combine ERA5 irradiance, Open Buildings footprints, and terrain context into a unified
+            analysis workflow. This allows fast server-side geospatial computation while keeping interaction simple in the browser.
+          </p>
         </div>
-        <div class="stat-note" style="margin-top:4px;">End date must be exactly one calendar day after start (UTC). Baseline and per-building yield use the same window.</div>
-      </div>
+      </article>
+
+      <article class="story-slide">
+        <div class="story-content">
+          <p class="eyebrow">Methodology</p>
+          <h2>Penalties and rooftop physics are explicitly modeled</h2>
+          <ul>
+            <li><strong>Shadow penalty:</strong> insolation-weighted shadow frequency from building geometry and solar positions.</li>
+            <li><strong>Urban heat penalty:</strong> derating from heat-island temperature effects.</li>
+            <li><strong>Soiling penalty:</strong> retention factor derived from aerosol proxies.</li>
+            <li><strong>Yield conversion:</strong> net irradiance ? energy using panel efficiency and performance ratio.</li>
+          </ul>
+          <p>
+            These assumptions are transparent so users can interpret and compare output quality across locations and time windows.
+          </p>
+          <button type="button" id="open-map-btn">Enter interactive map</button>
+        </div>
+      </article>
     </div>
+  </section>
 
-    <div class="section">
-      <div class="section-title">PV parameters</div>
-      <div class="row">
-        <div><label>Panel efficiency</label><input id="efficiency" type="number" step="0.01" value="0.18" min="0.05" max="0.30" /></div>
-        <div><label>Performance ratio</label><input id="pr" type="number" step="0.01" value="0.80" min="0.50" max="1.00" /></div>
-      </div>
-      <label>Building confidence</label>
-      <input id="confidence" type="number" step="0.05" value="0.7" min="0.5" max="1.0" />
-    </div>
+  <main id="app-layer">
+    <div id="wrap">
+      <aside id="left">
+        <h2>PV Mapping - Urban India</h2>
+        <p class="subtle">Click the map to select a location.</p>
 
-    <div class="section">
-      <div class="section-title">Display units</div>
-      <label style="margin-top:0">Energy output</label>
-      <div class="unit-toggle">
-        <button id="unitKwh" class="active" onclick="setUnit('kWh')">kWh</button>
-        <button id="unitMwh" onclick="setUnit('MWh')">MWh</button>
-      </div>
-    </div>
-
-    <button class="btn-primary" id="runBaselineBtn">Run baseline (AOI summary)</button>
-    <button class="btn-secondary" id="runYieldBtn">Run per-building yield</button>
-    <div id="status"></div>
-
-    <div class="section" id="summaryBox">
-      <div class="section-title" id="summaryTitle">AOI Summary</div>
-      <div id="summaryStats"></div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Raw API response</div>
-      <pre id="out">{}</pre>
-    </div>
-  </div>
-
-  <div id="map">
-    <div class="map-toggle">
-      <button id="btnStreet" class="active" onclick="setBasemap('street')">Street</button>
-      <button id="btnSatellite" onclick="setBasemap('satellite')">Satellite</button>
-      <button id="btnHybrid" onclick="setBasemap('hybrid')">Hybrid</button>
-    </div>
-  </div>
-</div>
-
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
-<script>
-  // ---- basemap layers ----
-  const basemaps = {
-    street: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors'
-    }),
-    satellite: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      maxZoom: 19, attribution: 'Tiles &copy; Esri &mdash; Source: Esri, Maxar, Earthstar Geographics'
-    }),
-    hybrid: L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-      maxZoom: 19, attribution: 'Tiles &copy; Esri'
-    }),
-  };
-  // hybrid labels overlay
-  const labelsLayer = L.tileLayer('https://stamen-tiles-{s}.a.ssl.fastly.net/toner-labels/{z}/{x}/{y}{r}.png', {
-    maxZoom: 19, opacity: 0.7
-  });
-
-  const map = L.map('map').setView([28.62, 77.09], 14);
-  basemaps.street.addTo(map);
-  let currentBasemap = 'street';
-
-  function setBasemap(name) {
-    Object.values(basemaps).forEach(l => { if (map.hasLayer(l)) map.removeLayer(l); });
-    if (map.hasLayer(labelsLayer)) map.removeLayer(labelsLayer);
-    basemaps[name].addTo(map);
-    if (name === 'hybrid') labelsLayer.addTo(map);
-    currentBasemap = name;
-    document.querySelectorAll('.map-toggle button').forEach(b => b.classList.remove('active'));
-    document.getElementById('btn' + name.charAt(0).toUpperCase() + name.slice(1)).classList.add('active');
-  }
-
-  // ---- unit state ----
-  let energyUnit = 'kWh';
-  function setUnit(u) {
-    energyUnit = u;
-    document.getElementById('unitKwh').classList.toggle('active', u === 'kWh');
-    document.getElementById('unitMwh').classList.toggle('active', u === 'MWh');
-    // re-render last card if present
-    if (window._lastCardData) {
-      if (window._lastCardType === 'building') showBuildingCard(window._lastCardData);
-      else showSummary(window._lastCardData);
-    }
-  }
-
-  // ---- format numbers cleanly ----
-  function fmtEnergy(kwh, suffix) {
-    if (kwh == null) return '-';
-    const suf = suffix != null ? suffix : '/yr';
-    if (energyUnit === 'MWh') return (kwh / 1000).toFixed(1) + ' MWh' + suf;
-    if (Math.abs(kwh) >= 1e6) return (kwh / 1e6).toFixed(2) + ' GWh' + suf;
-    if (Math.abs(kwh) >= 1e3) return Math.round(kwh).toLocaleString() + ' kWh' + suf;
-    return kwh.toFixed(0) + ' kWh' + suf;
-  }
-
-  function fmtIrr(v, perYear) {
-    if (v == null) return '-';
-    return v.toFixed(0) + ' kWh/m\u00b2' + (perYear === false ? '' : '/yr');
-  }
-
-  function fmtArea(m2) {
-    if (m2 == null) return '-';
-    if (m2 >= 1e6) return (m2 / 1e6).toFixed(2) + ' km\u00b2';
-    if (m2 >= 1e4) return (m2 / 1e4).toFixed(2) + ' ha';
-    return Math.round(m2).toLocaleString() + ' m\u00b2';
-  }
-
-  function fmtKwp(roofM2, efficiency) {
-    if (!roofM2 || !efficiency) return '-';
-    return (roofM2 * efficiency).toFixed(1) + ' kWp';
-  }
-
-  function fmtCo2(kwhYear) {
-    // India grid emission factor: ~0.82 kg CO2/kWh (CEA 2022)
-    if (!kwhYear) return '-';
-    const kg = kwhYear * 0.82;
-    if (kg >= 1000) return (kg / 1000).toFixed(1) + ' tCO\u2082/yr';
-    return kg.toFixed(0) + ' kg CO\u2082/yr';
-  }
-
-  // ---- map interaction ----
-  const latEl = document.getElementById('lat');
-  const lonEl = document.getElementById('lon');
-  const halfSizeEl = document.getElementById('halfSize');
-  const statusEl = document.getElementById('status');
-  let marker = null, aoiRect = null, buildingLayer = null;
-
-  function drawAOI(lat, lon) {
-    const h = parseFloat(halfSizeEl.value || '0.01');
-    if (marker) marker.remove();
-    if (aoiRect) aoiRect.remove();
-    marker = L.marker([lat, lon]).addTo(map);
-    aoiRect = L.rectangle([[lat - h, lon - h], [lat + h, lon + h]], { color: '#2b8a3e', weight: 2, fill: false }).addTo(map);
-  }
-
-  map.on('click', e => {
-    latEl.value = e.latlng.lat.toFixed(6);
-    lonEl.value = e.latlng.lng.toFixed(6);
-    drawAOI(e.latlng.lat, e.latlng.lng);
-  });
-
-  halfSizeEl.addEventListener('change', () => {
-    if (latEl.value && lonEl.value) drawAOI(parseFloat(latEl.value), parseFloat(lonEl.value));
-  });
-
-  // ---- presets ----
-  async function loadPresets() {
-    try {
-      const r = await fetch('/api/presets');
-      const p = await r.json();
-      window._baselinePresets = p.baseline || {};
-      const b = window._baselinePresets;
-      if (b.year_bounds) {
-        const y = b.year_bounds.default;
-        document.getElementById('baselineYear').value = y;
-        document.getElementById('quarterYear').value = y;
-        document.getElementById('baselineYear').min = b.year_bounds.min;
-        document.getElementById('baselineYear').max = b.year_bounds.max;
-        document.getElementById('quarterYear').min = b.year_bounds.min;
-        document.getElementById('quarterYear').max = b.year_bounds.max;
-      }
-    } catch (e) {}
-  }
-
-  document.getElementById('mode').addEventListener('change', () => {
-    const m = document.getElementById('mode').value;
-    document.getElementById('rowYearly').style.display = m === 'yearly' ? '' : 'none';
-    document.getElementById('rowQuarterly').style.display = m === 'quarterly' ? '' : 'none';
-    document.getElementById('rowDaily').style.display = m === 'daily' ? '' : 'none';
-  });
-
-  // ---- shared payload ----
-  function basePayload() {
-    return {
-      lat: parseFloat(latEl.value),
-      lon: parseFloat(lonEl.value),
-      half_size_deg: parseFloat(halfSizeEl.value),
-      roof_year: 2022,
-      presence_threshold: parseFloat(document.getElementById('presence').value),
-      min_height_m: parseFloat(document.getElementById('minHeight').value),
-    };
-  }
-
-  function baselineTemporalPayload() {
-    const mode = document.getElementById('mode').value;
-    const o = { baseline_mode: mode };
-    if (mode === 'yearly') {
-      o.year = parseInt(document.getElementById('baselineYear').value, 10) || null;
-    } else if (mode === 'quarterly') {
-      o.year = parseInt(document.getElementById('quarterYear').value, 10) || null;
-      o.quarter = parseInt(document.getElementById('quarterSelect').value, 10);
-    } else {
-      o.start_date = document.getElementById('startDate').value || null;
-      o.end_date_exclusive = document.getElementById('endDate').value || null;
-    }
-    return o;
-  }
-
-  // ---- baseline run ----
-  document.getElementById('runBaselineBtn').onclick = async () => {
-    statusEl.textContent = 'Running baseline...';
-    const payload = { ...basePayload(), ...baselineTemporalPayload() };
-    try {
-      const r = await fetch('/api/baseline', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const data = await r.json();
-      document.getElementById('out').textContent = JSON.stringify(data, null, 2);
-      statusEl.textContent = 'Baseline done.';
-      window._lastCardData = data;
-      window._lastCardType = 'summary';
-      showSummary(data);
-    } catch (e) {
-      statusEl.textContent = 'Error: ' + e.message;
-    }
-  };
-
-  function showSummary(data) {
-    const box = document.getElementById('summaryBox');
-    box.style.display = 'block';
-    document.getElementById('summaryTitle').textContent = 'AOI Summary';
-    const rb = data.roof_baseline || {};
-    const rt = data.rooftop || {};
-    const efficiency = parseFloat(document.getElementById('efficiency').value) || 0.18;
-    const pr = parseFloat(document.getElementById('pr').value) || 0.80;
-    const estimatedYield = rb.pre_penalty_total_kwh_year ? rb.pre_penalty_total_kwh_year * efficiency * pr : null;
-    const bmode = rb.baseline_time_mode || data.baseline_time_mode || '';
-    const rows = [
-      ['Rooftop area', fmtArea(rt.rooftop_candidate_area_m2)],
-      ['AOI area', fmtArea((rt.aoi_area_km2 || 0) * 1e6)],
-      ['Regional GHI (annualized)', fmtIrr(rb.regional_irradiance_kwh_m2_year), bmode === 'yearly' ? 'ERA5, one calendar year' : 'Scaled to kWh/m\u00b2/yr from window'],
-    ];
-    if (rb.period_ghi_kwh_m2 != null) {
-      rows.push(['GHI (window total)', fmtIrr(rb.period_ghi_kwh_m2, false), 'kWh/m\u00b2 over selected dates only']);
-      rows.push(['Pre-penalty (window)', fmtEnergy(rb.pre_penalty_total_kwh_period, ''), 'All rooftops, period only']);
-    }
-    rows.push(
-      ['Pre-penalty (annualized)', fmtEnergy(rb.pre_penalty_total_kwh_year), 'Comparable to yearly mode'],
-      ['Est. yield (all rooftops)', fmtEnergy(estimatedYield), `At ${(efficiency*100).toFixed(0)}% eff. \u00d7 ${(pr*100).toFixed(0)}% PR`],
-      ['Est. CO\u2082 offset', fmtCo2(estimatedYield), 'India grid factor 0.82 kg/kWh'],
-      ['Irradiance source', rb.irradiance_source || '-'],
-    );
-    document.getElementById('summaryStats').innerHTML = rows.map(([l, v, note]) =>
-      `<div class="stat"><span class="stat-label">${l}${note ? `<span class="stat-note">${note}</span>` : ''}</span><span class="stat-value">${v}</span></div>`
-    ).join('');
-  }
-
-  // ---- per-building yield run ----
-  document.getElementById('runYieldBtn').onclick = async () => {
-    statusEl.textContent = 'Finding building at selected point...';
-    const payload = {
-      ...basePayload(),
-      ...baselineTemporalPayload(),
-      panel_efficiency: parseFloat(document.getElementById('efficiency').value),
-      performance_ratio: parseFloat(document.getElementById('pr').value),
-      building_confidence: parseFloat(document.getElementById('confidence').value),
-    };
-    try {
-      const r = await fetch('/api/yield', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const data = await r.json();
-
-      if (data.status === 'no_building_at_point') {
-        statusEl.textContent = data.message;
-        document.getElementById('out').textContent = JSON.stringify(data, null, 2);
-        return;
-      }
-
-      document.getElementById('out').textContent = JSON.stringify({
-        status: data.status,
-        period_yield_kwh: data.period_yield_kwh,
-        roof_area_m2: data.roof_area_m2,
-        net_irradiance_kwh_m2_period: data.net_irradiance_kwh_m2_period,
-        mean_shadow_fraction: data.mean_shadow_fraction,
-        regional_ghi_kwh_m2_period: data.regional_ghi_kwh_m2_period,
-        start_date: data.start_date,
-        end_date_exclusive: data.end_date_exclusive,
-        baseline_time_mode: data.baseline_time_mode,
-        building_confidence: data.building_confidence,
-      }, null, 2);
-
-      statusEl.textContent = `Done. Yield: ${fmtEnergy(data.period_yield_kwh, '')} | Shadow: ${data.mean_shadow_fraction != null ? (data.mean_shadow_fraction * 100).toFixed(1) + '%' : 'n/a'}`;
-      window._lastCardData = data;
-      window._lastCardType = 'building';
-      showBuildingCard(data);
-      if (data.geojson) renderBuildingLayer(data.geojson);
-    } catch (e) {
-      statusEl.textContent = 'Error: ' + e.message;
-    }
-  };
-
-  function showBuildingCard(data) {
-    const box = document.getElementById('summaryBox');
-    box.style.display = 'block';
-    document.getElementById('summaryTitle').textContent = 'Selected Building';
-    const eff = data.panel_efficiency || 0.18;
-    const pr = data.performance_ratio || 0.80;
-    const kwp = data.roof_area_m2 ? data.roof_area_m2 * eff : null;
-    const py = data.period_yield_kwh;
-    const rows = [
-      ['PV output (period)', fmtEnergy(py, ''), 'Same window as baseline', true],
-      ['Estimated capacity', kwp ? kwp.toFixed(1) + ' kWp' : '-', `At ${(eff*100).toFixed(0)}% panel efficiency`],
-      ['CO\u2082 offset (period)', fmtCo2(py), 'India grid 0.82 kg CO\u2082/kWh'],
-      ['Roof area', fmtArea(data.roof_area_m2)],
-      ['Net GHI on roof (period)', fmtIrr(data.net_irradiance_kwh_m2_period, false), 'After shadow, kWh/m\u00b2 over window'],
-      ['Shadow fraction', data.mean_shadow_fraction != null ? (data.mean_shadow_fraction * 100).toFixed(1) + '%' : '-'],
-      ['Regional GHI (period)', fmtIrr(data.regional_ghi_kwh_m2_period, false), 'ERA5, AOI centroid, pre-shadow'],
-      ['Time window',
-        (data.start_date && data.end_date_exclusive) ? `${data.start_date} to ${data.end_date_exclusive}` : '-',
-        data.baseline_time_mode || ''],
-      ['Panel efficiency', (eff * 100).toFixed(0) + '%'],
-      ['Performance ratio', (pr * 100).toFixed(0) + '%'],
-      ['Building confidence', data.building_confidence != null ? (data.building_confidence * 100).toFixed(0) + '%' : '-'],
-    ];
-    document.getElementById('summaryStats').innerHTML = rows.map(([l, v, note, hi]) =>
-      `<div class="stat"><span class="stat-label">${l}${note ? `<span class="stat-note">${note}</span>` : ''}</span><span class="stat-value${hi ? ' highlight' : ''}">${v}</span></div>`
-    ).join('');
-  }
-
-  function renderBuildingLayer(geojson) {
-    if (buildingLayer) buildingLayer.remove();
-    if (!geojson || !geojson.features || geojson.features.length === 0) return;
-
-    buildingLayer = L.geoJSON(geojson, {
-      style: () => ({
-        fillColor: '#f59f00',
-        fillOpacity: 0.55,
-        color: '#e67700',
-        weight: 2,
-      }),
-      onEachFeature: (feature, layer) => {
-        const p = feature.properties || {};
-        const eff = parseFloat(document.getElementById('efficiency').value) || 0.18;
-        const kwp = p.roof_area_m2 ? (p.roof_area_m2 * eff).toFixed(1) + ' kWp' : 'n/a';
-        layer.bindPopup(`
-          <div class="building-popup">
-            <b>Selected Building</b>
-            <div class="pop-row"><span>PV (period)</span><span class="pop-val">${fmtEnergy(p.period_yield_kwh, '')}</span></div>
-            <div class="pop-row"><span>Capacity</span><span class="pop-val">${kwp}</span></div>
-            <div class="pop-row"><span>CO\u2082 offset</span><span class="pop-val">${fmtCo2(p.period_yield_kwh)}</span></div>
-            <div class="pop-row"><span>Roof area</span><span class="pop-val">${fmtArea(p.roof_area_m2)}</span></div>
-            <div class="pop-row"><span>Net GHI</span><span class="pop-val">${fmtIrr(p.net_irradiance_kwh_m2_period, false)}</span></div>
-            <div class="pop-row"><span>Shadow</span><span class="pop-val">${p.mean_shadow_fraction != null ? (p.mean_shadow_fraction * 100).toFixed(1) + '%' : 'n/a'}</span></div>
-            <div class="pop-row"><span>Confidence</span><span class="pop-val">${p.confidence != null ? (p.confidence * 100).toFixed(0) + '%' : 'n/a'}</span></div>
+        <section class="section">
+          <div class="section-title">Location</div>
+          <div class="row">
+            <div><label for="lat">Latitude</label><input id="lat" type="number" step="0.000001" placeholder="28.6437" /></div>
+            <div><label for="lon">Longitude</label><input id="lon" type="number" step="0.000001" placeholder="77.0880" /></div>
           </div>
-        `).openPopup();
-      }
-    }).addTo(map);
+          <label for="halfSize">AOI half-size (deg)</label>
+          <input id="halfSize" type="number" step="0.001" value="0.01" />
+        </section>
 
-    map.fitBounds(buildingLayer.getBounds(), { padding: [40, 40] });
-  }
+        <section class="section">
+          <div class="section-title">Rooftop filter</div>
+          <div class="row">
+            <div><label for="presence">Presence threshold</label><input id="presence" type="number" step="0.05" value="0.5" min="0" max="1" /></div>
+            <div><label for="minHeight">Min height (m)</label><input id="minHeight" type="number" step="0.5" value="0" min="0" /></div>
+          </div>
+        </section>
 
-  loadPresets();
-</script>
+        <section class="section">
+          <div class="section-title">Irradiance baseline (ERA5)</div>
+          <label for="mode">Aggregation</label>
+          <select id="mode">
+            <option value="yearly">Yearly (one calendar year)</option>
+            <option value="quarterly">Quarterly (3 calendar months)</option>
+            <option value="daily">One calendar day (ISO dates)</option>
+          </select>
+          <div class="row" id="rowYearly">
+            <div><label for="baselineYear">Year</label><input id="baselineYear" type="number" value="2024" /></div>
+          </div>
+          <div class="row" id="rowQuarterly" hidden>
+            <div><label for="quarterYear">Year</label><input id="quarterYear" type="number" value="2024" /></div>
+            <div>
+              <label for="quarterSelect">Quarter</label>
+              <select id="quarterSelect">
+                <option value="1">Q1 (Jan-Mar)</option>
+                <option value="2" selected>Q2 (Apr-Jun)</option>
+                <option value="3">Q3 (Jul-Sep)</option>
+                <option value="4">Q4 (Oct-Dec)</option>
+              </select>
+            </div>
+          </div>
+          <div id="rowDaily" hidden>
+            <div class="row">
+              <div><label for="startDate">Day start (ISO)</label><input id="startDate" type="text" placeholder="2024-10-03" /></div>
+              <div><label for="endDate">Next day (exclusive)</label><input id="endDate" type="text" placeholder="2024-10-04" /></div>
+            </div>
+            <p class="hint-note">End date must be exactly one calendar day after start (UTC).</p>
+          </div>
+        </section>
+
+        <section class="section">
+          <div class="section-title">PV parameters</div>
+          <div class="row">
+            <div><label for="efficiency">Panel efficiency</label><input id="efficiency" type="number" step="0.01" value="0.18" min="0.05" max="0.30" /></div>
+            <div><label for="pr">Performance ratio</label><input id="pr" type="number" step="0.01" value="0.80" min="0.50" max="1.00" /></div>
+          </div>
+          <label for="confidence">Building confidence</label>
+          <input id="confidence" type="number" step="0.05" value="0.7" min="0.5" max="1.0" />
+        </section>
+
+        <section class="section">
+          <div class="section-title">Display units</div>
+          <label class="no-top">Energy output</label>
+          <div class="unit-toggle">
+            <button id="unitKwh" class="active" type="button">kWh</button>
+            <button id="unitMwh" type="button">MWh</button>
+          </div>
+        </section>
+
+        <button class="btn-primary" id="runBaselineBtn" type="button">Run baseline (AOI summary)</button>
+        <button class="btn-secondary" id="runYieldBtn" type="button">Run per-building yield</button>
+        <p class="hint-note">
+          Up to <strong>7</strong> distinct rooftops are saved (LRU). Selecting the same rooftop again updates that saved entry.
+        </p>
+
+        <div id="status"></div>
+
+        <section class="section" id="buildingHistorySection" hidden>
+          <div class="section-title">Saved rooftops <span id="buildingCount"></span></div>
+          <div class="chip-row" id="buildingChips"></div>
+        </section>
+
+        <section class="section" id="summaryBox" hidden>
+          <div class="section-title" id="summaryTitle">AOI Summary</div>
+          <div id="summaryStats"></div>
+        </section>
+
+        <section class="section">
+          <div class="section-title">Raw API response</div>
+          <pre id="out">{}</pre>
+        </section>
+      </aside>
+
+      <section id="map-wrap">
+        <div id="map"></div>
+        <div class="map-toggle">
+          <button id="btnStreet" class="active" type="button">Street</button>
+          <button id="btnSatellite" type="button">Satellite</button>
+          <button id="btnHybrid" type="button">Hybrid</button>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script type="module" src="/scripts/main.js"></script>
 </body>
 </html>
