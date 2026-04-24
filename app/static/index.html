@@ -7,7 +7,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
   <link rel="stylesheet" href="/styles/main.css" />
 </head>
 <body>
@@ -21,6 +21,13 @@
   </section>
 
   <section id="story-layer" aria-label="Project overview">
+    <div class="story-hud" aria-hidden="true">
+      <div class="story-brand">PV Mapping · Urban India</div>
+      <div class="story-progress">
+        <div class="story-progress-bar" id="story-progress-bar"></div>
+      </div>
+      <div class="story-chapter" id="story-chapter">01 / 03</div>
+    </div>
     <div id="story-scroll">
       <article class="story-slide">
         <div class="story-content">
@@ -33,6 +40,9 @@
           <p>
             Scroll to explore the data pipeline, then enter the interactive map to run AOI and per-building calculations.
           </p>
+          <div class="story-footer">
+            <div class="story-hint">Scroll to continue</div>
+          </div>
         </div>
       </article>
 
@@ -42,14 +52,18 @@
           <h2>Google Earth Engine powers the geospatial workflow</h2>
           <img
             class="story-image"
-            src="https://upload.wikimedia.org/wikipedia/commons/thumb/2/25/Blue_Marble_2002.png/1280px-Blue_Marble_2002.png"
-            alt="Earth observation styled globe"
+            src="/assets/solar-system.png"
+            alt="Solar system illustration (reference)"
             loading="lazy"
           />
           <p>
             We use Google Earth Engine to combine ERA5 irradiance, Open Buildings footprints, and terrain context into a unified
             analysis workflow. This allows fast server-side geospatial computation while keeping interaction simple in the browser.
           </p>
+          <div class="story-callout">
+            <div class="story-callout-title">Why Earth Engine?</div>
+            <div class="story-callout-body">Fast server-side computation, consistent datasets, and reproducible results across regions.</div>
+          </div>
         </div>
       </article>
 
@@ -61,12 +75,13 @@
             <li><strong>Shadow penalty:</strong> insolation-weighted shadow frequency from building geometry and solar positions.</li>
             <li><strong>Urban heat penalty:</strong> derating from heat-island temperature effects.</li>
             <li><strong>Soiling penalty:</strong> retention factor derived from aerosol proxies.</li>
-            <li><strong>Yield conversion:</strong> net irradiance ? energy using panel efficiency and performance ratio.</li>
+            <li><strong>Yield conversion:</strong> net irradiance → energy using panel efficiency and performance ratio.</li>
           </ul>
           <p>
             These assumptions are transparent so users can interpret and compare output quality across locations and time windows.
           </p>
           <button type="button" id="open-map-btn">Enter interactive map</button>
+          <div class="story-footnote">Tip: start by clicking a rooftop in satellite view for best results.</div>
         </div>
       </article>
     </div>
@@ -147,6 +162,31 @@
           </div>
         </section>
 
+        <section class="section">
+          <div class="section-title">Map overlays (open data)</div>
+          <div class="overlay-grid">
+            <label class="check">
+              <input type="checkbox" id="ovRoofMask" />
+              <span>Rooftop mask</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="ovShadow" />
+              <span>Shadow frequency</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="ovNetIrr" />
+              <span>Net irradiance</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" id="ovDerate" />
+              <span>Combined derate</span>
+            </label>
+          </div>
+          <label for="overlayOpacity">Overlay opacity</label>
+          <input id="overlayOpacity" type="range" min="0" max="100" value="70" />
+          <p class="hint-note">Overlays are generated from the same AOI + time window inputs.</p>
+        </section>
+
         <button class="btn-primary" id="runBaselineBtn" type="button">Run baseline (AOI summary)</button>
         <button class="btn-secondary" id="runYieldBtn" type="button">Run per-building yield</button>
         <p class="hint-note">
@@ -158,11 +198,18 @@
         <section class="section" id="buildingHistorySection" hidden>
           <div class="section-title">Saved rooftops <span id="buildingCount"></span></div>
           <div class="chip-row" id="buildingChips"></div>
+          <div class="saved-list" id="buildingList"></div>
         </section>
 
         <section class="section" id="summaryBox" hidden>
           <div class="section-title" id="summaryTitle">AOI Summary</div>
           <div id="summaryStats"></div>
+        </section>
+
+        <section class="section" id="urbanContextBox" hidden>
+          <div class="section-title">Urban context (open data)</div>
+          <div id="urbanContextStats"></div>
+          <p class="hint-note" id="urbanContextNote"></p>
         </section>
 
         <section class="section">
@@ -183,7 +230,7 @@
   </main>
 
   <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script type="module" src="/scripts/main.js"></script>
 </body>
 </html>

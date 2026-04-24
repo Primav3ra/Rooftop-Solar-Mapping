@@ -1,4 +1,4 @@
-import { fetchBaseline, fetchPresets, fetchYield } from './api.js';
+import { fetchBaseline, fetchPresets, fetchTiles, fetchUrbanMetrics, fetchYield } from './api.js';
 import { runIntroSequence } from './intro.js';
 import { createMapController } from './map.js';
 import { BUILDING_CAP, BuildingLru, buildingKeyFromGeojson, fmtArea, fmtCo2, fmtEnergy, fmtIrr } from './state.js';
@@ -22,6 +22,9 @@ const dom = {
   summaryBox: document.getElementById('summaryBox'),
   summaryTitle: document.getElementById('summaryTitle'),
   summaryStats: document.getElementById('summaryStats'),
+  urbanContextBox: document.getElementById('urbanContextBox'),
+  urbanContextStats: document.getElementById('urbanContextStats'),
+  urbanContextNote: document.getElementById('urbanContextNote'),
   unitKwh: document.getElementById('unitKwh'),
   unitMwh: document.getElementById('unitMwh'),
   runBaselineBtn: document.getElementById('runBaselineBtn'),
@@ -42,9 +45,15 @@ const dom = {
   historySection: document.getElementById('buildingHistorySection'),
   historyCount: document.getElementById('buildingCount'),
   historyChips: document.getElementById('buildingChips'),
+  historyList: document.getElementById('buildingList'),
   btnStreet: document.getElementById('btnStreet'),
   btnSatellite: document.getElementById('btnSatellite'),
   btnHybrid: document.getElementById('btnHybrid'),
+  ovRoofMask: document.getElementById('ovRoofMask'),
+  ovShadow: document.getElementById('ovShadow'),
+  ovNetIrr: document.getElementById('ovNetIrr'),
+  ovDerate: document.getElementById('ovDerate'),
+  overlayOpacity: document.getElementById('overlayOpacity'),
 };
 
 const mapCtrl = createMapController();
@@ -133,6 +142,35 @@ function showSummary(data) {
     .join('');
 }
 
+function showUrbanContext(metrics) {
+  if (!dom.urbanContextBox || !dom.urbanContextStats) return;
+  dom.urbanContextBox.hidden = false;
+
+  const rows = [
+    ['AOI area', `${(metrics.aoi_area_km2 ?? 0).toFixed(2)} km²`],
+    ['Buildings (Open Buildings)', `${metrics.open_buildings_count ?? 0}`],
+    ['Building density', metrics.buildings_density_per_km2 != null ? `${metrics.buildings_density_per_km2.toFixed(0)} / km²` : '-'],
+    ['Footprint coverage', metrics.footprint_coverage_pct != null ? `${metrics.footprint_coverage_pct.toFixed(1)}%` : '-'],
+    ['Mean footprint area', metrics.footprint_mean_area_m2 != null ? `${metrics.footprint_mean_area_m2.toFixed(0)} m²` : '-'],
+    ['Median footprint area', metrics.footprint_median_area_m2 != null ? `${metrics.footprint_median_area_m2.toFixed(0)} m²` : '-'],
+  ];
+
+  dom.urbanContextStats.innerHTML = rows
+    .map(([label, value]) => `
+      <div class="stat">
+        <span class="stat-label">${label}</span>
+        <span class="stat-value">${value}</span>
+      </div>
+    `)
+    .join('');
+
+  if (dom.urbanContextNote) {
+    dom.urbanContextNote.textContent = metrics.pysal_available
+      ? 'Advanced spatial statistics are available (PySAL detected).'
+      : 'Advanced spatial statistics are optional (PySAL not installed). Showing robust open-data summaries.';
+  }
+}
+
 function showBuildingCard(data) {
   dom.summaryBox.hidden = false;
   dom.summaryTitle.textContent = 'Selected Building';
@@ -182,9 +220,35 @@ function renderHistory() {
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/"/g, '&quot;');
-      return `<button type="button" class="chip${active}" data-key="${encodeURIComponent(key)}" title="${safeLabel}">${safeLabel}</button>`;
+      const tip = entry?.data?.period_yield_kwh != null
+        ? `${safeLabel} • ${formatEnergy(entry.data.period_yield_kwh, '')}`
+        : safeLabel;
+      const safeTip = String(tip).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+      return `<button type="button" class="chip${active}" data-key="${encodeURIComponent(key)}" title="${safeTip}">${safeLabel}</button>`;
     })
     .join('');
+
+  if (dom.historyList) {
+    dom.historyList.innerHTML = items
+      .slice()
+      .reverse()
+      .map(({ key, entry }, idx) => {
+        const isActive = key === state.activeBuildingKey;
+        const title = `Rooftop ${items.length - idx}${isActive ? ' (active)' : ''}`;
+        const sub = entry?.label || '';
+        const val = entry?.data?.period_yield_kwh != null ? formatEnergy(entry.data.period_yield_kwh, '') : '-';
+        return `
+          <div class="saved-row">
+            <div>
+              <div class="saved-row-title">${title}</div>
+              <span class="saved-row-sub">${sub}</span>
+            </div>
+            <div class="saved-row-val">${val}</div>
+          </div>
+        `;
+      })
+      .join('');
+  }
 
   dom.historyChips.querySelectorAll('.chip').forEach((chip) => {
     chip.addEventListener('click', () => {
@@ -216,6 +280,9 @@ function refreshCard() {
 }
 
 async function handleBaselineRun() {
+  dom.runBaselineBtn.disabled = true;
+  dom.runYieldBtn.disabled = true;
+  dom.runBaselineBtn.classList.add('btn-loading');
   dom.status.textContent = 'Running baseline...';
   const payload = { ...basePayload(), ...baselineTemporalPayload() };
 
@@ -227,12 +294,32 @@ async function handleBaselineRun() {
     state.lastCardData = data;
     state.lastCardType = 'summary';
     showSummary(data);
+
+    // Also refresh open-data urban context metrics for the same AOI.
+    try {
+      const m = await fetchUrbanMetrics({
+        ...basePayload(),
+        building_confidence: Number(dom.confidence.value),
+        limit: 400,
+      });
+      if (m.status === 'ok') showUrbanContext(m);
+    } catch {
+      // keep baseline usable even if metrics fail
+    }
   } catch (error) {
     dom.status.textContent = `Error: ${error.message}`;
+    showToast('Baseline failed. Check inputs and try again.', 5200);
+  } finally {
+    dom.runBaselineBtn.disabled = false;
+    dom.runYieldBtn.disabled = false;
+    dom.runBaselineBtn.classList.remove('btn-loading');
   }
 }
 
 async function handleYieldRun() {
+  dom.runBaselineBtn.disabled = true;
+  dom.runYieldBtn.disabled = true;
+  dom.runYieldBtn.classList.add('btn-loading');
   dom.status.textContent = 'Finding building at selected point...';
 
   const clickLat = Number(dom.lat.value);
@@ -252,6 +339,7 @@ async function handleYieldRun() {
     if (data.status === 'no_building_at_point') {
       dom.status.textContent = data.message;
       dom.out.textContent = JSON.stringify(data, null, 2);
+      showToast('No building polygon found under the click point. Try clicking directly on a rooftop.', 5200);
       return;
     }
 
@@ -299,6 +387,11 @@ async function handleYieldRun() {
     renderHistory();
   } catch (error) {
     dom.status.textContent = `Error: ${error.message}`;
+    showToast('Per-building run failed. Try again in a moment.', 5200);
+  } finally {
+    dom.runBaselineBtn.disabled = false;
+    dom.runYieldBtn.disabled = false;
+    dom.runYieldBtn.classList.remove('btn-loading');
   }
 }
 
@@ -325,6 +418,25 @@ async function loadPresetsAndApply() {
   } catch {
     // Keep static defaults when presets are unavailable.
   }
+}
+
+function tilesPayload(layer) {
+  return {
+    ...basePayload(),
+    ...baselineTemporalPayload(),
+    project_id: undefined, // backend uses env default if not provided
+    layer,
+  };
+}
+
+async function enableOverlay(id, layer) {
+  const opacity = Number(dom.overlayOpacity?.value || 70) / 100;
+  const payload = tilesPayload(layer);
+  const res = await fetchTiles(payload);
+  if (res.status !== 'ok' || !res.urlTemplate) {
+    throw new Error(res.detail || 'Tiles endpoint failed');
+  }
+  mapCtrl.addRasterOverlay(id, res.urlTemplate, opacity, 'aoi-line');
 }
 
 function bindEvents() {
@@ -362,6 +474,48 @@ function bindEvents() {
   dom.btnStreet.addEventListener('click', () => mapCtrl.setBasemap('street'));
   dom.btnSatellite.addEventListener('click', () => mapCtrl.setBasemap('satellite'));
   dom.btnHybrid.addEventListener('click', () => mapCtrl.setBasemap('hybrid'));
+
+  dom.overlayOpacity?.addEventListener('input', () => {
+    const opacity = Number(dom.overlayOpacity.value || 70) / 100;
+    mapCtrl.setOverlayOpacity(opacity);
+  });
+
+  dom.ovRoofMask?.addEventListener('change', async () => {
+    try {
+      if (dom.ovRoofMask.checked) await enableOverlay('roofMask', 'roof_mask');
+      else mapCtrl.removeRasterOverlay('roofMask');
+    } catch (e) {
+      dom.ovRoofMask.checked = false;
+      showToast(`Overlay failed: ${e.message}`, 5200);
+    }
+  });
+  dom.ovShadow?.addEventListener('change', async () => {
+    try {
+      if (dom.ovShadow.checked) await enableOverlay('shadow', 'shadow_frequency');
+      else mapCtrl.removeRasterOverlay('shadow');
+    } catch (e) {
+      dom.ovShadow.checked = false;
+      showToast(`Overlay failed: ${e.message}`, 5200);
+    }
+  });
+  dom.ovNetIrr?.addEventListener('change', async () => {
+    try {
+      if (dom.ovNetIrr.checked) await enableOverlay('netIrr', 'net_irradiance');
+      else mapCtrl.removeRasterOverlay('netIrr');
+    } catch (e) {
+      dom.ovNetIrr.checked = false;
+      showToast(`Overlay failed: ${e.message}`, 5200);
+    }
+  });
+  dom.ovDerate?.addEventListener('change', async () => {
+    try {
+      if (dom.ovDerate.checked) await enableOverlay('derate', 'combined_derate');
+      else mapCtrl.removeRasterOverlay('derate');
+    } catch (e) {
+      dom.ovDerate.checked = false;
+      showToast(`Overlay failed: ${e.message}`, 5200);
+    }
+  });
 }
 
 function start() {

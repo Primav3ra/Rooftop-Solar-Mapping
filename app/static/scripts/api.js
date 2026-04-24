@@ -21,3 +21,21 @@ export async function fetchYield(payload) {
   });
   return response.json();
 }
+
+export async function fetchTiles(payload) {
+  const response = await fetch('/api/tiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return response.json();
+}
+
+export async function fetchUrbanMetrics(payload) {
+  const response = await fetch('/api/urban_metrics', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return response.json();
+}
