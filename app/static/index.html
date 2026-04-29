@@ -6,231 +6,131 @@
   <title>PV Mapping - Urban India</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
-  <link rel="stylesheet" href="/styles/main.css" />
+  <link rel="stylesheet" href="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.css" />
+  <link rel="stylesheet" href="/styles/dashboard.css?v=1" />
 </head>
 <body>
   <div id="toast" role="status" aria-live="polite"></div>
+  <div id="introOverlay">
+    <div id="intro-root"></div>
+    <div class="introHud introHud-fallback">
+      <div class="introText">SOLARIS/GRID INITIALIZING...</div>
+      <button id="skipIntroFallback" type="button">Skip intro</button>
+    </div>
+  </div>
 
-  <section id="intro-layer" aria-label="Intro animation">
-    <div class="intro-bg-image" aria-hidden="true"></div>
-    <canvas id="intro-canvas" aria-hidden="true"></canvas>
-    <div class="intro-overlay"></div>
-    <button type="button" id="skip-intro">Skip intro</button>
-  </section>
-
-  <section id="story-layer" aria-label="Project overview">
-    <div class="story-hud" aria-hidden="true">
-      <div class="story-brand">PV Mapping · Urban India</div>
-      <div class="story-progress">
-        <div class="story-progress-bar" id="story-progress-bar"></div>
+  <main class="dashboard">
+    <header class="dash-topbar">
+      <div class="brand">
+        <div class="sun-dot"></div>
+        <div>
+          <h1>SOLARIS/GRID</h1>
+          <p>ROOFTOP PV POTENTIAL ANALYZER</p>
+        </div>
       </div>
-      <div class="story-chapter" id="story-chapter">01 / 03</div>
-    </div>
-    <div id="story-scroll">
-      <article class="story-slide">
-        <div class="story-content">
-          <p class="eyebrow">PV Mapping for Urban India</p>
-          <h1>Estimate rooftop solar potential with physically grounded methods</h1>
-          <p>
-            This platform helps planners and researchers quickly evaluate rooftop solar opportunities in dense urban regions.
-            Instead of a black-box estimate, it shows how weather, shadows, and environmental penalties shape expected output.
-          </p>
-          <p>
-            Scroll to explore the data pipeline, then enter the interactive map to run AOI and per-building calculations.
-          </p>
-          <div class="story-footer">
-            <div class="story-hint">Scroll to continue</div>
-          </div>
-        </div>
-      </article>
+      <div class="meta">
+        <span>link · stable</span>
+        <span id="clock"></span>
+      </div>
+    </header>
 
-      <article class="story-slide">
-        <div class="story-content">
-          <p class="eyebrow">Data Engine</p>
-          <h2>Google Earth Engine powers the geospatial workflow</h2>
-          <img
-            class="story-image"
-            src="/assets/solar-system.png"
-            alt="Solar system illustration (reference)"
-            loading="lazy"
-          />
-          <p>
-            We use Google Earth Engine to combine ERA5 irradiance, Open Buildings footprints, and terrain context into a unified
-            analysis workflow. This allows fast server-side geospatial computation while keeping interaction simple in the browser.
-          </p>
-          <div class="story-callout">
-            <div class="story-callout-title">Why Earth Engine?</div>
-            <div class="story-callout-body">Fast server-side computation, consistent datasets, and reproducible results across regions.</div>
-          </div>
-        </div>
-      </article>
-
-      <article class="story-slide">
-        <div class="story-content">
-          <p class="eyebrow">Methodology</p>
-          <h2>Penalties and rooftop physics are explicitly modeled</h2>
-          <ul>
-            <li><strong>Shadow penalty:</strong> insolation-weighted shadow frequency from building geometry and solar positions.</li>
-            <li><strong>Urban heat penalty:</strong> derating from heat-island temperature effects.</li>
-            <li><strong>Soiling penalty:</strong> retention factor derived from aerosol proxies.</li>
-            <li><strong>Yield conversion:</strong> net irradiance → energy using panel efficiency and performance ratio.</li>
-          </ul>
-          <p>
-            These assumptions are transparent so users can interpret and compare output quality across locations and time windows.
-          </p>
-          <button type="button" id="open-map-btn">Enter interactive map</button>
-          <div class="story-footnote">Tip: start by clicking a rooftop in satellite view for best results.</div>
-        </div>
-      </article>
-    </div>
-  </section>
-
-  <main id="app-layer">
-    <div id="wrap">
-      <aside id="left">
-        <h2>PV Mapping - Urban India</h2>
-        <p class="subtle">Click the map to select a location.</p>
-
-        <section class="section">
-          <div class="section-title">Location</div>
-          <div class="row">
-            <div><label for="lat">Latitude</label><input id="lat" type="number" step="0.000001" placeholder="28.6437" /></div>
-            <div><label for="lon">Longitude</label><input id="lon" type="number" step="0.000001" placeholder="77.0880" /></div>
-          </div>
-          <label for="halfSize">AOI half-size (deg)</label>
-          <input id="halfSize" type="number" step="0.001" value="0.01" />
-        </section>
-
-        <section class="section">
-          <div class="section-title">Rooftop filter</div>
-          <div class="row">
-            <div><label for="presence">Presence threshold</label><input id="presence" type="number" step="0.05" value="0.5" min="0" max="1" /></div>
-            <div><label for="minHeight">Min height (m)</label><input id="minHeight" type="number" step="0.5" value="0" min="0" /></div>
-          </div>
-        </section>
-
-        <section class="section">
-          <div class="section-title">Irradiance baseline (ERA5)</div>
-          <label for="mode">Aggregation</label>
-          <select id="mode">
-            <option value="yearly">Yearly (one calendar year)</option>
-            <option value="quarterly">Quarterly (3 calendar months)</option>
-            <option value="daily">One calendar day (ISO dates)</option>
-          </select>
-          <div class="row" id="rowYearly">
-            <div><label for="baselineYear">Year</label><input id="baselineYear" type="number" value="2024" /></div>
-          </div>
-          <div class="row" id="rowQuarterly" hidden>
-            <div><label for="quarterYear">Year</label><input id="quarterYear" type="number" value="2024" /></div>
-            <div>
-              <label for="quarterSelect">Quarter</label>
-              <select id="quarterSelect">
-                <option value="1">Q1 (Jan-Mar)</option>
-                <option value="2" selected>Q2 (Apr-Jun)</option>
-                <option value="3">Q3 (Jul-Sep)</option>
-                <option value="4">Q4 (Oct-Dec)</option>
-              </select>
+    <section class="dash-grid">
+      <aside class="left-col">
+        <article class="panel panel-edge">
+          <h2>TEMPORAL RANGE</h2>
+          <div class="range-row">
+            <label>FROM</label>
+            <div class="two">
+              <select id="startMonth"></select>
+              <select id="startYear"></select>
             </div>
           </div>
-          <div id="rowDaily" hidden>
-            <div class="row">
-              <div><label for="startDate">Day start (ISO)</label><input id="startDate" type="text" placeholder="2024-10-03" /></div>
-              <div><label for="endDate">Next day (exclusive)</label><input id="endDate" type="text" placeholder="2024-10-04" /></div>
+          <div class="range-row">
+            <label>TO</label>
+            <div class="two">
+              <select id="endMonth"></select>
+              <select id="endYear"></select>
             </div>
-            <p class="hint-note">End date must be exactly one calendar day after start (UTC).</p>
           </div>
-        </section>
+        </article>
 
-        <section class="section">
-          <div class="section-title">PV parameters</div>
-          <div class="row">
-            <div><label for="efficiency">Panel efficiency</label><input id="efficiency" type="number" step="0.01" value="0.18" min="0.05" max="0.30" /></div>
-            <div><label for="pr">Performance ratio</label><input id="pr" type="number" step="0.01" value="0.80" min="0.50" max="1.00" /></div>
+        <article class="panel panel-edge">
+          <h2>RESULT BOX</h2>
+          <div class="result-grid">
+            <div class="result-line"><span>BASELINE</span><b id="pvBaseline">-</b><span>kWh</span></div>
+            <div class="result-line"><span>AFTER SHADOW</span><b id="pvAfterShadow">-</b><span>kWh</span></div>
+            <div class="result-line"><span>AFTER UHI</span><b id="pvAfterUhi">-</b><span>kWh</span></div>
+            <div class="result-line"><span>AFTER SOILING</span><b id="pvAfterSoiling">-</b><span>kWh</span></div>
+            <div class="result-line result-line-net"><span>NET</span><b id="pvNet">-</b><span>kWh</span></div>
           </div>
-          <label for="confidence">Building confidence</label>
-          <input id="confidence" type="number" step="0.05" value="0.7" min="0.5" max="1.0" />
-        </section>
 
-        <section class="section">
-          <div class="section-title">Display units</div>
-          <label class="no-top">Energy output</label>
-          <div class="unit-toggle">
-            <button id="unitKwh" class="active" type="button">kWh</button>
-            <button id="unitMwh" type="button">MWh</button>
+          <div class="chart-head" style="margin-top:10px">
+            <h2 style="margin:0 0 0 0">PENALTY CONTRIBUTION</h2>
+            <span id="penaltyLossTotal">-</span>
           </div>
-        </section>
-
-        <section class="section">
-          <div class="section-title">Map overlays (open data)</div>
-          <div class="overlay-grid">
-            <label class="check">
-              <input type="checkbox" id="ovRoofMask" />
-              <span>Rooftop mask</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" id="ovShadow" />
-              <span>Shadow frequency</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" id="ovNetIrr" />
-              <span>Net irradiance</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" id="ovDerate" />
-              <span>Combined derate</span>
-            </label>
+          <div class="penalty-chart-wrap">
+            <canvas id="penaltyChart" height="170"></canvas>
           </div>
-          <label for="overlayOpacity">Overlay opacity</label>
-          <input id="overlayOpacity" type="range" min="0" max="100" value="70" />
-          <p class="hint-note">Overlays are generated from the same AOI + time window inputs.</p>
-        </section>
+          <p class="muted" id="penaltyChartHint">Penalty contribution breakdown.</p>
+        </article>
 
-        <button class="btn-primary" id="runBaselineBtn" type="button">Run baseline (AOI summary)</button>
-        <button class="btn-secondary" id="runYieldBtn" type="button">Run per-building yield</button>
-        <p class="hint-note">
-          Up to <strong>7</strong> distinct rooftops are saved (LRU). Selecting the same rooftop again updates that saved entry.
-        </p>
-
-        <div id="status"></div>
-
-        <section class="section" id="buildingHistorySection" hidden>
-          <div class="section-title">Saved rooftops <span id="buildingCount"></span></div>
-          <div class="chip-row" id="buildingChips"></div>
-          <div class="saved-list" id="buildingList"></div>
-        </section>
-
-        <section class="section" id="summaryBox" hidden>
-          <div class="section-title" id="summaryTitle">AOI Summary</div>
-          <div id="summaryStats"></div>
-        </section>
-
-        <section class="section" id="urbanContextBox" hidden>
-          <div class="section-title">Urban context (open data)</div>
-          <div id="urbanContextStats"></div>
-          <p class="hint-note" id="urbanContextNote"></p>
-        </section>
-
-        <section class="section">
-          <div class="section-title">Raw API response</div>
-          <pre id="out">{}</pre>
-        </section>
+        <article class="panel panel-edge">
+          <h2>TARGET BUILDING</h2>
+          <p class="muted">Click rooftop to select building; AOI radius is derived from building size. Then run compute.</p>
+          <div class="aoi-stats">
+            <div><span>lat</span><b id="aoiLat">-</b></div>
+            <div><span>lon</span><b id="aoiLon">-</b></div>
+            <div><span>area</span><b id="aoiArea">-</b></div>
+          </div>
+          <button id="runComputeBtn" type="button" class="compute-btn">COMPUTE</button>
+          <p id="status" class="status"></p>
+        </article>
       </aside>
 
-      <section id="map-wrap">
+      <section class="middle-col panel panel-edge corner-frame">
         <div id="map"></div>
+        <div class="map-hud">SURFACE · SCAN · 3D</div>
         <div class="map-toggle">
           <button id="btnStreet" class="active" type="button">Street</button>
           <button id="btnSatellite" type="button">Satellite</button>
           <button id="btnHybrid" type="button">Hybrid</button>
+          <button id="btnTemperature" type="button">Temperature</button>
         </div>
       </section>
-    </div>
+
+      <aside class="right-col">
+        <div class="kpi-grid">
+          <article class="panel panel-edge kpi"><p>TOTAL ENERGY</p><h3 id="totalEnergy">-</h3><span>kWh</span></article>
+          <article class="panel panel-edge kpi"><p>DAILY AVG</p><h3 id="dailyAvg">-</h3><span>kWh</span></article>
+          <article class="panel panel-edge kpi"><p>PEAK POWER</p><h3 id="peakPower">-</h3><span>kW</span></article>
+          <article class="panel panel-edge kpi"><p>CO2 AVOIDED</p><h3 id="co2Avoided">-</h3><span>kg</span></article>
+        </div>
+        <article class="panel panel-edge roof-panel">
+          <div class="chart-head"><h2>ROOFTOP ANALYSIS</h2><span>shade fraction</span></div>
+          <div class="roof-stats">
+            <div class="roof-line"><span>ROOF AREA</span><b id="roofAreaM2">-</b><span>m2</span></div>
+            <div class="roof-line"><span>AREA IN SHADE</span><b id="roofShadeAreaM2">-</b><span>m2</span></div>
+            <div class="roof-line roof-line-pct"><span>SHADE %</span><b id="roofShadePct">-</b><span>%</span></div>
+          </div>
+        </article>
+        <article class="panel panel-edge shade-panel">
+          <div class="chart-head"><h2>SHADE MATRIX</h2><span>6 x UTC buckets</span></div>
+          <div id="shadeMatrix" class="shade-matrix"></div>
+        </article>
+        <article class="panel panel-edge chart-panel">
+          <div class="chart-head"><h2>GENERATION CURVE</h2><span id="seriesLabel">kWh/day</span></div>
+          <canvas id="generationChart" height="220"></canvas>
+        </article>
+      </aside>
+    </section>
   </main>
 
-  <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
   <script src="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+  <script src="https://api.mapbox.com/mapbox-gl-js/v3.3.0/mapbox-gl.js"></script>
+  <script type="module" src="/intro-build/intro.bundle.js" defer></script>
   <script type="module" src="/scripts/main.js"></script>
 </body>
 </html>

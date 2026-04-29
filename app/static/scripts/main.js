@@ -1,532 +1,834 @@
-import { fetchBaseline, fetchPresets, fetchTiles, fetchUrbanMetrics, fetchYield } from './api.js';
-import { runIntroSequence } from './intro.js';
+import { fetchBaseline, fetchPresets, fetchTiles, fetchYield, fetchBuildings } from './api.js';
 import { createMapController } from './map.js';
-import { BUILDING_CAP, BuildingLru, buildingKeyFromGeojson, fmtArea, fmtCo2, fmtEnergy, fmtIrr } from './state.js';
 
-const state = {
-  energyUnit: 'kWh',
-  lastCardData: null,
-  lastCardType: null,
-  activeBuildingKey: null,
-  buildingLru: new BuildingLru(BUILDING_CAP),
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+const BASE_CONFIG = {
+  half_size_deg: 0.01,
+  roof_year: 2022,
+  presence_threshold: 0.5,
+  min_height_m: 0,
+  panel_efficiency: 0.18,
+  performance_ratio: 0.8,
+  building_confidence: 0.7,
 };
 
 const dom = {
-  lat: document.getElementById('lat'),
-  lon: document.getElementById('lon'),
-  halfSize: document.getElementById('halfSize'),
-  presence: document.getElementById('presence'),
-  minHeight: document.getElementById('minHeight'),
-  status: document.getElementById('status'),
-  out: document.getElementById('out'),
-  summaryBox: document.getElementById('summaryBox'),
-  summaryTitle: document.getElementById('summaryTitle'),
-  summaryStats: document.getElementById('summaryStats'),
-  urbanContextBox: document.getElementById('urbanContextBox'),
-  urbanContextStats: document.getElementById('urbanContextStats'),
-  urbanContextNote: document.getElementById('urbanContextNote'),
-  unitKwh: document.getElementById('unitKwh'),
-  unitMwh: document.getElementById('unitMwh'),
-  runBaselineBtn: document.getElementById('runBaselineBtn'),
-  runYieldBtn: document.getElementById('runYieldBtn'),
-  mode: document.getElementById('mode'),
-  rowYearly: document.getElementById('rowYearly'),
-  rowQuarterly: document.getElementById('rowQuarterly'),
-  rowDaily: document.getElementById('rowDaily'),
-  baselineYear: document.getElementById('baselineYear'),
-  quarterYear: document.getElementById('quarterYear'),
-  quarterSelect: document.getElementById('quarterSelect'),
-  startDate: document.getElementById('startDate'),
-  endDate: document.getElementById('endDate'),
-  efficiency: document.getElementById('efficiency'),
-  pr: document.getElementById('pr'),
-  confidence: document.getElementById('confidence'),
   toast: document.getElementById('toast'),
-  historySection: document.getElementById('buildingHistorySection'),
-  historyCount: document.getElementById('buildingCount'),
-  historyChips: document.getElementById('buildingChips'),
-  historyList: document.getElementById('buildingList'),
+  clock: document.getElementById('clock'),
+  startMonth: document.getElementById('startMonth'),
+  startYear: document.getElementById('startYear'),
+  endMonth: document.getElementById('endMonth'),
+  endYear: document.getElementById('endYear'),
+  aoiLat: document.getElementById('aoiLat'),
+  aoiLon: document.getElementById('aoiLon'),
+  aoiArea: document.getElementById('aoiArea'),
+  status: document.getElementById('status'),
+  runComputeBtn: document.getElementById('runComputeBtn'),
+  totalEnergy: document.getElementById('totalEnergy'),
+  dailyAvg: document.getElementById('dailyAvg'),
+  peakPower: document.getElementById('peakPower'),
+  co2Avoided: document.getElementById('co2Avoided'),
+  seriesLabel: document.getElementById('seriesLabel'),
+  generationChart: document.getElementById('generationChart'),
+  pvBaseline: document.getElementById('pvBaseline'),
+  pvAfterShadow: document.getElementById('pvAfterShadow'),
+  pvAfterUhi: document.getElementById('pvAfterUhi'),
+  pvAfterSoiling: document.getElementById('pvAfterSoiling'),
+  pvNet: document.getElementById('pvNet'),
+  penaltyChart: document.getElementById('penaltyChart'),
+  penaltyLossTotal: document.getElementById('penaltyLossTotal'),
+  roofAreaM2: document.getElementById('roofAreaM2'),
+  roofShadeAreaM2: document.getElementById('roofShadeAreaM2'),
+  roofShadePct: document.getElementById('roofShadePct'),
+  shadeMatrix: document.getElementById('shadeMatrix'),
+  skipIntroFallback: document.getElementById('skipIntroFallback'),
+  skipIntro: document.getElementById('skipIntro'),
   btnStreet: document.getElementById('btnStreet'),
   btnSatellite: document.getElementById('btnSatellite'),
   btnHybrid: document.getElementById('btnHybrid'),
-  ovRoofMask: document.getElementById('ovRoofMask'),
-  ovShadow: document.getElementById('ovShadow'),
-  ovNetIrr: document.getElementById('ovNetIrr'),
-  ovDerate: document.getElementById('ovDerate'),
-  overlayOpacity: document.getElementById('overlayOpacity'),
+  btnTemperature: document.getElementById('btnTemperature'),
+  introOverlay: document.getElementById('introOverlay'),
 };
 
-const mapCtrl = createMapController();
+const state = {
+  lat: null,
+  lon: null,
+  half_size_deg: BASE_CONFIG.half_size_deg,
+  chart: null,
+  penaltyChart: null,
+  lastYield: null,
+  tileCache: {},
+  currentOverlayId: null,
+  savedCalcs: [],
+  activeSavedId: null,
+};
 
-function showToast(message, timeout = 4300) {
-  dom.toast.textContent = message;
+let mapCtrl = null;
+
+function showToast(text, timeout = 3500) {
+  dom.toast.textContent = text;
   dom.toast.classList.add('show');
   clearTimeout(showToast.timer);
   showToast.timer = setTimeout(() => dom.toast.classList.remove('show'), timeout);
 }
 
-function formatEnergy(value, suffix = '/yr') {
-  return fmtEnergy(value, state.energyUnit, suffix);
+function setStatus(text) {
+  dom.status.textContent = text;
 }
 
-function basePayload() {
+function fmtNum(value, digits = 0) {
+  if (value == null || Number.isNaN(value)) return '-';
+  return Number(value).toFixed(digits).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+function pointInRing(lon, lat, ring) {
+  // Ray casting for GeoJSON rings (coordinates are [lon, lat]).
+  let inside = false;
+  if (!Array.isArray(ring) || ring.length < 3) return false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i += 1) {
+    const xi = ring[i][0];
+    const yi = ring[i][1];
+    const xj = ring[j][0];
+    const yj = ring[j][1];
+
+    const intersects = (yi > lat) !== (yj > lat) &&
+      lon < ((xj - xi) * (lat - yi)) / (yj - yi + 1e-12) + xi;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+function firstRingFromGeoGeometry(geom) {
+  if (!geom || !geom.type) return null;
+  if (geom.type === 'Polygon') return geom.coordinates?.[0] ?? null;
+  if (geom.type === 'MultiPolygon') return geom.coordinates?.[0]?.[0] ?? null;
+  return null;
+}
+
+function daysInRange(startDate, endDateExclusive) {
+  const s = new Date(startDate);
+  const e = new Date(endDateExclusive);
+  return Math.max(1, Math.round((e - s) / (1000 * 60 * 60 * 24)));
+}
+
+function inferWindow() {
+  const sm = Number(dom.startMonth.value) + 1;
+  const sy = Number(dom.startYear.value);
+  const em = Number(dom.endMonth.value) + 1;
+  const ey = Number(dom.endYear.value);
+
+  if (sy === ey && sm === 1 && em === 12) {
+    return { baseline_mode: 'yearly', year: sy, label: 'kWh / month', kind: 'yearly' };
+  }
+  if (sy === ey && em - sm === 2 && [1, 4, 7, 10].includes(sm)) {
+    return { baseline_mode: 'quarterly', year: sy, quarter: Math.floor((sm - 1) / 3) + 1, label: 'kWh / month', kind: 'quarterly' };
+  }
+  if (sy === ey && sm === em) {
+    return { baseline_mode: 'monthly', year: sy, month: sm, label: 'kWh / week', kind: 'monthly' };
+  }
+
+  showToast('For exact backend windows, use same month (monthly), quarter, or Jan-Dec (yearly). Falling back to start month.');
+  return { baseline_mode: 'monthly', year: sy, month: sm, label: 'kWh / week', kind: 'monthly' };
+}
+
+function computePvStages(baselineData, yieldData) {
+  // Prefer authoritative backend stage yields if present (prevents scope mismatches).
+  const backendBaseline = Number(yieldData?.baseline_yield_kwh);
+  const backendAfterShadow = Number(yieldData?.after_shadow_yield_kwh);
+  const backendAfterUhi = Number(yieldData?.after_uhi_yield_kwh);
+  const backendAfterSoiling = Number(yieldData?.after_soiling_yield_kwh);
+  const backendNet = Number(yieldData?.period_yield_kwh);
+
+  const hasBackendStages = [backendBaseline, backendAfterShadow, backendAfterUhi, backendAfterSoiling, backendNet]
+    .every((v) => Number.isFinite(v));
+
+  const baselinePv = hasBackendStages ? backendBaseline : 0;
+
+  const meanShadowRetention = Number(yieldData?.mean_shadow_retention ?? 1);
+  const uhiDerateFactor = Number(yieldData?.uhi_derate_factor ?? 1);
+  const soilingRetentionFactor = Number(yieldData?.soiling_retention_factor ?? 1);
+
+  const afterShadowPv = hasBackendStages ? backendAfterShadow : baselinePv * meanShadowRetention;
+  const afterUhiPv = hasBackendStages ? backendAfterUhi : afterShadowPv * uhiDerateFactor;
+  const afterSoilingPv = hasBackendStages ? backendAfterSoiling : afterUhiPv * soilingRetentionFactor;
+
+  // Use backend's computed net value as the last stage to keep "net" consistent.
+  const netPv = hasBackendStages ? backendNet : Number(yieldData?.period_yield_kwh ?? afterSoilingPv);
+
+  const totalLossPv = Math.max(0, baselinePv - netPv);
+  const shadowLossPv = Math.max(0, baselinePv - afterShadowPv);
+  const uhiLossPv = Math.max(0, afterShadowPv - afterUhiPv);
+  const soilingLossPv = Math.max(0, afterUhiPv - afterSoilingPv);
+
+  const pctOfLoss = (pv) => (totalLossPv > 0 ? (pv / totalLossPv) * 100 : 0);
+
+  // Stage-wise penalty (loss) percentages applied by backend factors.
+  const shadowPenaltyPercent = baselinePv > 0 ? (1 - meanShadowRetention) * 100 : 0;
+  const uhiPenaltyPercent = afterShadowPv > 0 ? (1 - uhiDerateFactor) * 100 : 0;
+  const soilingPenaltyPercent = afterUhiPv > 0 ? (1 - soilingRetentionFactor) * 100 : 0;
+
   return {
-    lat: Number(dom.lat.value),
-    lon: Number(dom.lon.value),
-    half_size_deg: Number(dom.halfSize.value),
-    roof_year: 2022,
-    presence_threshold: Number(dom.presence.value),
-    min_height_m: Number(dom.minHeight.value),
+    baselinePv,
+    afterShadowPv,
+    afterUhiPv,
+    afterSoilingPv,
+    netPv,
+    totalLossPv,
+    totalLossPct: baselinePv > 0 ? (totalLossPv / baselinePv) * 100 : 0,
+    shadowContributionPct: pctOfLoss(shadowLossPv),
+    uhiContributionPct: pctOfLoss(uhiLossPv),
+    soilingContributionPct: pctOfLoss(soilingLossPv),
+    shadowPenaltyPercent,
+    uhiPenaltyPercent,
+    soilingPenaltyPercent,
   };
 }
 
-function baselineTemporalPayload() {
-  const mode = dom.mode.value;
-  const payload = { baseline_mode: mode };
+function ensurePenaltyChart() {
+  if (state.penaltyChart) return state.penaltyChart;
+  const ctxCanvas = dom.penaltyChart;
+  if (!ctxCanvas) return null;
 
-  if (mode === 'yearly') {
-    payload.year = Number.parseInt(dom.baselineYear.value, 10) || null;
-  } else if (mode === 'quarterly') {
-    payload.year = Number.parseInt(dom.quarterYear.value, 10) || null;
-    payload.quarter = Number.parseInt(dom.quarterSelect.value, 10);
-  } else {
-    payload.start_date = dom.startDate.value || null;
-    payload.end_date_exclusive = dom.endDate.value || null;
-  }
+  state.penaltyChart = new Chart(ctxCanvas, {
+    type: 'bar',
+    data: {
+      labels: ['Shadow', 'Urban Heat', 'Soiling'],
+      datasets: [
+        {
+          data: [0, 0, 0],
+          backgroundColor: ['#f97316', '#22c55e', '#ffb347'],
+          borderColor: ['#f97316', '#22c55e', '#ffb347'],
+          borderWidth: 1,
+          borderRadius: 4,
+        },
+      ],
+    },
+    options: {
+      maintainAspectRatio: false,
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: '#9ab0d4', font: { size: 10 } }, grid: { display: false } },
+        y: {
+          min: 0,
+          max: 100,
+          ticks: {
+            color: '#9ab0d4',
+            font: { size: 10 },
+            callback: (v) => `${v}%`,
+          },
+          grid: { color: 'rgba(90,118,170,0.25)' },
+        },
+      },
+    },
+  });
 
-  return payload;
+  return state.penaltyChart;
 }
 
-function showSummary(data) {
-  dom.summaryBox.hidden = false;
-  dom.summaryTitle.textContent = 'AOI Summary';
+function renderResultBox(baselineData, yieldData) {
+  const stages = computePvStages(baselineData, yieldData);
+  dom.pvBaseline.textContent = fmtNum(stages.baselinePv, 0);
+  dom.pvAfterShadow.textContent =
+    stages.baselinePv > 0 ? `${fmtNum(stages.afterShadowPv, 0)} (-${stages.shadowPenaltyPercent.toFixed(1)}%)` : '-';
+  dom.pvAfterUhi.textContent =
+    stages.afterShadowPv > 0 ? `${fmtNum(stages.afterUhiPv, 0)} (-${stages.uhiPenaltyPercent.toFixed(1)}%)` : '-';
+  dom.pvAfterSoiling.textContent =
+    stages.afterUhiPv > 0 ? `${fmtNum(stages.afterSoilingPv, 0)} (-${stages.soilingPenaltyPercent.toFixed(1)}%)` : '-';
+  dom.pvNet.textContent =
+    stages.baselinePv > 0 ? `${fmtNum(stages.netPv, 0)} (-${stages.totalLossPct.toFixed(1)}%)` : '-';
 
-  const rb = data.roof_baseline || {};
-  const rt = data.rooftop || {};
-  const efficiency = Number(dom.efficiency.value) || 0.18;
-  const performanceRatio = Number(dom.pr.value) || 0.8;
-  const estimatedYield = rb.pre_penalty_total_kwh_year
-    ? rb.pre_penalty_total_kwh_year * efficiency * performanceRatio
-    : null;
+  const backendLossKwh = Number(yieldData?.penalty_loss_kwh);
+  const backendLossPct = Number(yieldData?.penalty_loss_pct);
+  const hasBackendLoss = Number.isFinite(backendLossKwh) && Number.isFinite(backendLossPct);
 
-  const mode = rb.baseline_time_mode || data.baseline_time_mode || '';
-  const rows = [
-    ['Rooftop area', fmtArea(rt.rooftop_candidate_area_m2)],
-    ['AOI area', fmtArea((rt.aoi_area_km2 || 0) * 1e6)],
-    [
-      'Regional GHI (annualized)',
-      fmtIrr(rb.regional_irradiance_kwh_m2_year),
-      mode === 'yearly' ? 'ERA5, one calendar year' : 'Scaled to annualized equivalent from selected window',
-    ],
-  ];
+  const lossLabel = hasBackendLoss
+    ? `${fmtNum(backendLossKwh, 0)} kWh loss (${backendLossPct.toFixed(1)}%)`
+    : (stages.baselinePv > 0 ? `${fmtNum(stages.totalLossPv, 0)} kWh loss (${stages.totalLossPct.toFixed(1)}%)` : '-');
+  if (dom.penaltyLossTotal) dom.penaltyLossTotal.textContent = lossLabel;
 
-  if (rb.period_ghi_kwh_m2 != null) {
-    rows.push(['GHI (window total)', fmtIrr(rb.period_ghi_kwh_m2, false), 'kWh/m\u00b2 over selected dates']);
-    rows.push(['Pre-penalty (window)', formatEnergy(rb.pre_penalty_total_kwh_period, ''), 'All rooftops for selected window']);
-  }
+  const chart = ensurePenaltyChart();
+  if (!chart) return;
 
-  rows.push(
-    ['Pre-penalty (annualized)', formatEnergy(rb.pre_penalty_total_kwh_year)],
-    ['Estimated yield (all rooftops)', formatEnergy(estimatedYield), `At ${(efficiency * 100).toFixed(0)}% efficiency x ${(performanceRatio * 100).toFixed(0)}% PR`],
-    ['Estimated CO\u2082 offset', fmtCo2(estimatedYield), 'India grid factor 0.82 kg/kWh'],
-    ['Irradiance source', rb.irradiance_source || '-'],
-  );
+  const pc = yieldData?.penalty_contribution || {};
+  const sPct = Number(pc.shadow_contribution_pct);
+  const uPct = Number(pc.uhi_contribution_pct);
+  const soPct = Number(pc.soiling_contribution_pct);
+  const hasBackendContribution = [sPct, uPct, soPct].every((v) => Number.isFinite(v));
 
-  dom.summaryStats.innerHTML = rows
-    .map(([label, value, note]) => `
-      <div class="stat">
-        <span class="stat-label">${label}${note ? `<span class="stat-note">${note}</span>` : ''}</span>
-        <span class="stat-value">${value}</span>
-      </div>
-    `)
-    .join('');
+  chart.data.datasets[0].data = hasBackendContribution
+    ? [sPct, uPct, soPct]
+    : [stages.shadowContributionPct, stages.uhiContributionPct, stages.soilingContributionPct];
+  chart.update();
 }
 
-function showUrbanContext(metrics) {
-  if (!dom.urbanContextBox || !dom.urbanContextStats) return;
-  dom.urbanContextBox.hidden = false;
+function renderKpis(baselineData, yieldData, temporalWindow) {
+  const potential = Number(yieldData.period_yield_kwh ?? 0);
+  const days = daysInRange(temporalWindow.start_date, temporalWindow.end_date_exclusive);
+  const dailyAvg = potential / days;
+  const peakKw = potential / Math.max(1, days * 5);
+  const co2Kg = potential * 0.82;
 
-  const rows = [
-    ['AOI area', `${(metrics.aoi_area_km2 ?? 0).toFixed(2)} km²`],
-    ['Buildings (Open Buildings)', `${metrics.open_buildings_count ?? 0}`],
-    ['Building density', metrics.buildings_density_per_km2 != null ? `${metrics.buildings_density_per_km2.toFixed(0)} / km²` : '-'],
-    ['Footprint coverage', metrics.footprint_coverage_pct != null ? `${metrics.footprint_coverage_pct.toFixed(1)}%` : '-'],
-    ['Mean footprint area', metrics.footprint_mean_area_m2 != null ? `${metrics.footprint_mean_area_m2.toFixed(0)} m²` : '-'],
-    ['Median footprint area', metrics.footprint_median_area_m2 != null ? `${metrics.footprint_median_area_m2.toFixed(0)} m²` : '-'],
-  ];
-
-  dom.urbanContextStats.innerHTML = rows
-    .map(([label, value]) => `
-      <div class="stat">
-        <span class="stat-label">${label}</span>
-        <span class="stat-value">${value}</span>
-      </div>
-    `)
-    .join('');
-
-  if (dom.urbanContextNote) {
-    dom.urbanContextNote.textContent = metrics.pysal_available
-      ? 'Advanced spatial statistics are available (PySAL detected).'
-      : 'Advanced spatial statistics are optional (PySAL not installed). Showing robust open-data summaries.';
-  }
+  // "TOTAL ENERGY" should match the PV output (net) shown elsewhere.
+  dom.totalEnergy.textContent = fmtNum(potential, 0);
+  dom.dailyAvg.textContent = fmtNum(dailyAvg, 1);
+  dom.peakPower.textContent = fmtNum(peakKw, 2);
+  dom.co2Avoided.textContent = fmtNum(co2Kg, 0);
 }
 
-function showBuildingCard(data) {
-  dom.summaryBox.hidden = false;
-  dom.summaryTitle.textContent = 'Selected Building';
+function renderRooftopAnalysis(yieldData) {
+  const roofArea = Number(yieldData?.roof_area_m2 ?? 0);
+  const shadeFraction = Number(yieldData?.mean_shadow_fraction ?? 0);
+  const shadeArea = roofArea * shadeFraction;
+  const shadePct = shadeFraction * 100;
 
-  const eff = data.panel_efficiency || 0.18;
-  const performanceRatio = data.performance_ratio || 0.8;
-  const kwp = data.roof_area_m2 ? `${(data.roof_area_m2 * eff).toFixed(1)} kWp` : '-';
-  const py = data.period_yield_kwh;
-
-  const rows = [
-    ['PV output (period)', formatEnergy(py, ''), 'Same window as baseline', true],
-    ['Estimated capacity', kwp, `At ${(eff * 100).toFixed(0)}% panel efficiency`],
-    ['CO\u2082 offset (period)', fmtCo2(py), 'India grid 0.82 kg CO\u2082/kWh'],
-    ['Roof area', fmtArea(data.roof_area_m2)],
-    ['Net GHI on roof (period)', fmtIrr(data.net_irradiance_kwh_m2_period, false), 'After shadow over selected window'],
-    ['Shadow fraction', data.mean_shadow_fraction != null ? `${(data.mean_shadow_fraction * 100).toFixed(1)}%` : '-'],
-    ['Regional GHI (period)', fmtIrr(data.regional_ghi_kwh_m2_period, false), 'ERA5 at AOI centroid'],
-    ['Time window', data.start_date && data.end_date_exclusive ? `${data.start_date} to ${data.end_date_exclusive}` : '-', data.baseline_time_mode || ''],
-    ['Panel efficiency', `${(eff * 100).toFixed(0)}%`],
-    ['Performance ratio', `${(performanceRatio * 100).toFixed(0)}%`],
-    ['Building confidence', data.building_confidence != null ? `${(data.building_confidence * 100).toFixed(0)}%` : '-'],
-  ];
-
-  dom.summaryStats.innerHTML = rows
-    .map(([label, value, note, highlight]) => `
-      <div class="stat">
-        <span class="stat-label">${label}${note ? `<span class="stat-note">${note}</span>` : ''}</span>
-        <span class="stat-value${highlight ? ' highlight' : ''}">${value}</span>
-      </div>
-    `)
-    .join('');
+  if (dom.roofAreaM2) dom.roofAreaM2.textContent = fmtNum(roofArea, 0);
+  if (dom.roofShadeAreaM2) dom.roofShadeAreaM2.textContent = fmtNum(shadeArea, 0);
+  if (dom.roofShadePct) dom.roofShadePct.textContent = `${shadePct.toFixed(1)}`;
 }
 
-function renderHistory() {
-  const items = state.buildingLru.list();
-  if (!items.length) {
-    dom.historySection.hidden = true;
+function renderShadeMatrix(yieldData) {
+  if (!dom.shadeMatrix) return;
+  const intervals = yieldData?.shade_intervals || [];
+  if (!intervals.length) {
+    dom.shadeMatrix.innerHTML = '<div class="muted">No shade data.</div>';
     return;
   }
 
-  dom.historySection.hidden = false;
-  dom.historyCount.textContent = `(${items.length}/${BUILDING_CAP})`;
-  dom.historyChips.innerHTML = items
-    .map(({ key, entry }) => {
-      const active = key === state.activeBuildingKey ? ' active' : '';
-      const safeLabel = String(entry.label || key)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/"/g, '&quot;');
-      const tip = entry?.data?.period_yield_kwh != null
-        ? `${safeLabel} • ${formatEnergy(entry.data.period_yield_kwh, '')}`
-        : safeLabel;
-      const safeTip = String(tip).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
-      return `<button type="button" class="chip${active}" data-key="${encodeURIComponent(key)}" title="${safeTip}">${safeLabel}</button>`;
-    })
-    .join('');
-
-  if (dom.historyList) {
-    dom.historyList.innerHTML = items
-      .slice()
-      .reverse()
-      .map(({ key, entry }, idx) => {
-        const isActive = key === state.activeBuildingKey;
-        const title = `Rooftop ${items.length - idx}${isActive ? ' (active)' : ''}`;
-        const sub = entry?.label || '';
-        const val = entry?.data?.period_yield_kwh != null ? formatEnergy(entry.data.period_yield_kwh, '') : '-';
-        return `
-          <div class="saved-row">
-            <div>
-              <div class="saved-row-title">${title}</div>
-              <span class="saved-row-sub">${sub}</span>
-            </div>
-            <div class="saved-row-val">${val}</div>
+  dom.shadeMatrix.innerHTML = intervals
+    .map(
+      (it) => `
+        <div class="shade-row">
+          <span>${it.label ?? '-'}</span>
+          <div style="text-align:right">
+            <b>${it.shade_percent != null ? Number(it.shade_percent).toFixed(1) : '-' }%</b>
+            <small>${it.shade_area_m2 != null ? fmtNum(it.shade_area_m2, 0) : '-' } m2</small>
           </div>
-        `;
-      })
-      .join('');
+        </div>
+      `,
+    )
+    .join('');
+}
+
+function setChart(labels, values, label) {
+  dom.seriesLabel.textContent = label;
+  if (state.chart) {
+    state.chart.data.labels = labels;
+    state.chart.data.datasets[0].data = values;
+    state.chart.update();
+    return;
   }
-
-  dom.historyChips.querySelectorAll('.chip').forEach((chip) => {
-    chip.addEventListener('click', () => {
-      const encoded = chip.getAttribute('data-key');
-      const key = encoded ? decodeURIComponent(encoded) : '';
-      if (!key) return;
-      const payload = state.buildingLru.get(key);
-      if (!payload) return;
-
-      state.activeBuildingKey = key;
-      state.lastCardData = payload.data;
-      state.lastCardType = 'building';
-
-      showBuildingCard(payload.data);
-      if (payload.geojson) {
-        mapCtrl.renderBuildingLayer(payload.geojson, formatEnergy, fmtArea, fmtIrr, fmtCo2);
-      }
-
-      renderHistory();
-      dom.status.textContent = 'Showing saved rooftop result.';
-    });
+  state.chart = new Chart(dom.generationChart, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: '#ffb347',
+        backgroundColor: 'rgba(255,179,71,0.16)',
+        fill: true,
+        tension: 0.35,
+        pointRadius: 2.5,
+      }],
+    },
+    options: {
+      maintainAspectRatio: false,
+      interaction: { mode: 'nearest', intersect: true },
+      scales: {
+        x: { ticks: { color: '#9ab0d4', font: { size: 10 } }, grid: { display: false } },
+        y: { ticks: { color: '#9ab0d4', font: { size: 10 } }, grid: { color: 'rgba(90,118,170,0.25)' } },
+      },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          enabled: true,
+          backgroundColor: 'rgba(10,16,30,0.95)',
+          borderColor: 'rgba(255,179,71,0.45)',
+          borderWidth: 1,
+          titleColor: '#d9e7ff',
+          bodyColor: '#d9e7ff',
+          callbacks: {
+            label: (ctx) => {
+              const v = ctx.parsed?.y;
+              return ` ${fmtNum(v, 0)} kWh`;
+            },
+          },
+        },
+      },
+      onClick: (_evt, elements) => {
+        const el = elements?.[0];
+        if (!el) return;
+        const idx = el.index;
+        const x = state.chart?.data?.labels?.[idx];
+        const y = state.chart?.data?.datasets?.[0]?.data?.[idx];
+        if (x == null || y == null) return;
+        showToast(`${x}: ${fmtNum(y, 0)} kWh`, 2200);
+      },
+    },
   });
 }
 
-function refreshCard() {
-  if (!state.lastCardData) return;
-  if (state.lastCardType === 'building') showBuildingCard(state.lastCardData);
-  else showSummary(state.lastCardData);
+function renderSavedMarkers() {
+  if (!mapCtrl) return;
+  const points = state.savedCalcs.map((c, idx) => ({
+    id: c.id,
+    lat: c.lat,
+    lon: c.lon,
+    label: String(idx + 1),
+  }));
+  mapCtrl.renderSavedPoints(points, state.activeSavedId);
 }
 
-async function handleBaselineRun() {
-  dom.runBaselineBtn.disabled = true;
-  dom.runYieldBtn.disabled = true;
-  dom.runBaselineBtn.classList.add('btn-loading');
-  dom.status.textContent = 'Running baseline...';
-  const payload = { ...basePayload(), ...baselineTemporalPayload() };
-
-  try {
-    const data = await fetchBaseline(payload);
-    dom.out.textContent = JSON.stringify(data, null, 2);
-    dom.status.textContent = 'Baseline completed.';
-
-    state.lastCardData = data;
-    state.lastCardType = 'summary';
-    showSummary(data);
-
-    // Also refresh open-data urban context metrics for the same AOI.
-    try {
-      const m = await fetchUrbanMetrics({
-        ...basePayload(),
-        building_confidence: Number(dom.confidence.value),
-        limit: 400,
-      });
-      if (m.status === 'ok') showUrbanContext(m);
-    } catch {
-      // keep baseline usable even if metrics fail
-    }
-  } catch (error) {
-    dom.status.textContent = `Error: ${error.message}`;
-    showToast('Baseline failed. Check inputs and try again.', 5200);
-  } finally {
-    dom.runBaselineBtn.disabled = false;
-    dom.runYieldBtn.disabled = false;
-    dom.runBaselineBtn.classList.remove('btn-loading');
-  }
-}
-
-async function handleYieldRun() {
-  dom.runBaselineBtn.disabled = true;
-  dom.runYieldBtn.disabled = true;
-  dom.runYieldBtn.classList.add('btn-loading');
-  dom.status.textContent = 'Finding building at selected point...';
-
-  const clickLat = Number(dom.lat.value);
-  const clickLon = Number(dom.lon.value);
-
-  const payload = {
-    ...basePayload(),
-    ...baselineTemporalPayload(),
-    panel_efficiency: Number(dom.efficiency.value),
-    performance_ratio: Number(dom.pr.value),
-    building_confidence: Number(dom.confidence.value),
+function saveCalculation({ baseline, yieldData, temporal, series }) {
+  const id = String(Date.now());
+  const entry = {
+    id,
+    lat: state.lat,
+    lon: state.lon,
+    half_size_deg: state.half_size_deg,
+    createdAt: new Date().toISOString(),
+    temporal,
+    baseline,
+    yieldData,
+    series,
   };
+  state.savedCalcs.push(entry);
+  if (state.savedCalcs.length > 5) state.savedCalcs = state.savedCalcs.slice(-5);
+  state.activeSavedId = id;
+  renderSavedMarkers();
+}
 
-  try {
-    const data = await fetchYield(payload);
+function loadSavedCalculation(id) {
+  const entry = state.savedCalcs.find((e) => String(e.id) === String(id));
+  if (!entry) return;
+  state.activeSavedId = String(id);
+  state.lat = entry.lat;
+  state.lon = entry.lon;
+  state.half_size_deg = entry.half_size_deg ?? BASE_CONFIG.half_size_deg;
 
-    if (data.status === 'no_building_at_point') {
-      dom.status.textContent = data.message;
-      dom.out.textContent = JSON.stringify(data, null, 2);
-      showToast('No building polygon found under the click point. Try clicking directly on a rooftop.', 5200);
-      return;
+  dom.aoiLat.textContent = state.lat.toFixed(6);
+  dom.aoiLon.textContent = state.lon.toFixed(6);
+  mapCtrl?.drawAOI(state.lat, state.lon, state.half_size_deg);
+
+  renderResultBox(entry.baseline, entry.yieldData);
+  renderRooftopAnalysis(entry.yieldData);
+  renderShadeMatrix(entry.yieldData);
+  renderKpis(entry.baseline, entry.yieldData, entry.baseline.temporal_window);
+  if (mapCtrl) mapCtrl.renderBuildingLayer(entry.yieldData.geojson);
+  if (entry.series) setChart(entry.series.labels, entry.series.values, entry.temporal?.label ?? 'kWh');
+
+  renderSavedMarkers();
+  setStatus(`Loaded saved result #${state.savedCalcs.findIndex((e) => e.id === id) + 1} for comparison.`);
+}
+
+async function computeSeries(payloadBase, win) {
+  if (win.kind === 'yearly') {
+    const labels = MONTHS.slice();
+    const values = [];
+    for (let month = 1; month <= 12; month += 1) {
+      const data = await fetchYield({ ...payloadBase, baseline_mode: 'monthly', year: win.year, month });
+      values.push(Math.round(data.period_yield_kwh || 0));
     }
+    return { labels, values };
+  }
 
-    dom.out.textContent = JSON.stringify({
-      status: data.status,
-      period_yield_kwh: data.period_yield_kwh,
-      roof_area_m2: data.roof_area_m2,
-      net_irradiance_kwh_m2_period: data.net_irradiance_kwh_m2_period,
-      mean_shadow_fraction: data.mean_shadow_fraction,
-      regional_ghi_kwh_m2_period: data.regional_ghi_kwh_m2_period,
-      start_date: data.start_date,
-      end_date_exclusive: data.end_date_exclusive,
-      baseline_time_mode: data.baseline_time_mode,
-      building_confidence: data.building_confidence,
-    }, null, 2);
+  if (win.kind === 'quarterly') {
+    const months = { 1: [1, 2, 3], 2: [4, 5, 6], 3: [7, 8, 9], 4: [10, 11, 12] }[win.quarter];
+    const labels = months.map((m) => MONTHS[m - 1]);
+    const values = [];
+    for (const month of months) {
+      const data = await fetchYield({ ...payloadBase, baseline_mode: 'monthly', year: win.year, month });
+      values.push(Math.round(data.period_yield_kwh || 0));
+    }
+    return { labels, values };
+  }
 
-    data._clickLat = clickLat;
-    data._clickLon = clickLon;
+  const days = new Date(win.year, win.month, 0).getDate();
+  const bins = [0, 0, 0, 0, 0];
+  for (let day = 1; day <= days; day += 1) {
+    const start = `${win.year}-${String(win.month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const endDate = new Date(win.year, win.month - 1, day + 1);
+    const end = `${endDate.getFullYear()}-${String(endDate.getMonth() + 1).padStart(2, '0')}-${String(endDate.getDate()).padStart(2, '0')}`;
+    const data = await fetchYield({ ...payloadBase, baseline_mode: 'daily', start_date: start, end_date_exclusive: end });
+    const idx = Math.min(4, Math.floor((day - 1) / 7));
+    bins[idx] += Number(data.period_yield_kwh || 0);
+  }
+  return { labels: ['W1', 'W2', 'W3', 'W4', 'W5'], values: bins.map((v) => Math.round(v)) };
+}
 
-    const key = buildingKeyFromGeojson(data.geojson);
-    const entry = {
-      data: JSON.parse(JSON.stringify(data)),
-      geojson: data.geojson ? JSON.parse(JSON.stringify(data.geojson)) : null,
-      label: `${clickLat.toFixed(4)}, ${clickLon.toFixed(4)}`,
+async function showOverlayForLayer(layer) {
+  if (!mapCtrl) return;
+  if (state.lat == null || state.lon == null) return;
+
+  // Keep map overlays minimal: only Temperature is exposed in the UI.
+  if (layer !== 'temperature_delta') return;
+
+  const temporal = state.lastCompute?.temporal ?? inferWindow();
+  const payloadBase =
+    state.lastCompute?.payloadBase ??
+    {
+      lat: state.lat,
+      lon: state.lon,
+      half_size_deg: state.half_size_deg ?? BASE_CONFIG.half_size_deg,
+      roof_year: BASE_CONFIG.roof_year,
+      presence_threshold: BASE_CONFIG.presence_threshold,
+      min_height_m: BASE_CONFIG.min_height_m,
+      panel_efficiency: BASE_CONFIG.panel_efficiency,
+      performance_ratio: BASE_CONFIG.performance_ratio,
+      building_confidence: BASE_CONFIG.building_confidence,
     };
 
-    const { isDuplicate, evictedKey } = state.buildingLru.add(key, entry);
-    state.activeBuildingKey = key;
+  const overlayButtonsByOverlayId = {
+    temperature: dom.btnTemperature,
+  };
 
-    if (isDuplicate) {
-      showToast(`Same rooftop selected - saved entry refreshed (still one of ${BUILDING_CAP}).`);
-    } else if (evictedKey) {
-      showToast(`Maximum ${BUILDING_CAP} saved rooftops reached. Oldest entry removed.`, 5200);
-    }
+  const cfg = { overlayId: 'temperature', opacity: 0.55 };
 
-    dom.status.textContent = `Done. Yield: ${formatEnergy(data.period_yield_kwh, '')} | Shadow: ${data.mean_shadow_fraction != null ? `${(data.mean_shadow_fraction * 100).toFixed(1)}%` : 'n/a'}`;
+  // Toggle off if the same overlay is selected.
+  if (state.currentOverlayId === cfg.overlayId) {
+    mapCtrl.removeRasterOverlay(cfg.overlayId);
+    state.currentOverlayId = null;
+    Object.values(overlayButtonsByOverlayId).forEach((b) => b?.classList.remove('active'));
+    return;
+  }
 
-    state.lastCardData = data;
-    state.lastCardType = 'building';
+  // Remove previous overlay so the map stays readable.
+  if (state.currentOverlayId) {
+    mapCtrl.removeRasterOverlay(state.currentOverlayId);
+    state.currentOverlayId = null;
+  }
+  Object.values(overlayButtonsByOverlayId).forEach((b) => b?.classList.remove('active'));
 
-    showBuildingCard(data);
-    if (data.geojson) {
-      mapCtrl.renderBuildingLayer(data.geojson, formatEnergy, fmtArea, fmtIrr, fmtCo2);
-    }
-    renderHistory();
-  } catch (error) {
-    dom.status.textContent = `Error: ${error.message}`;
-    showToast('Per-building run failed. Try again in a moment.', 5200);
-  } finally {
-    dom.runBaselineBtn.disabled = false;
-    dom.runYieldBtn.disabled = false;
-    dom.runYieldBtn.classList.remove('btn-loading');
+  const res = await fetchTiles({ ...payloadBase, ...temporal, layer });
+  if (res.status === 'ok') {
+    mapCtrl.addRasterOverlay(cfg.overlayId, res.urlTemplate, cfg.opacity, 'aoi-line');
+    state.currentOverlayId = cfg.overlayId;
+    overlayButtonsByOverlayId[cfg.overlayId]?.classList.add('active');
+  } else {
+    showToast(res.message || 'Failed to fetch overlay tiles.');
   }
 }
 
-function handleModeChange() {
-  const mode = dom.mode.value;
-  dom.rowYearly.hidden = mode !== 'yearly';
-  dom.rowQuarterly.hidden = mode !== 'quarterly';
-  dom.rowDaily.hidden = mode !== 'daily';
+async function runCompute() {
+  if (state.lat == null || state.lon == null) {
+    showToast('Select rooftop location on map first.');
+    return;
+  }
+  const temporal = inferWindow();
+  state.lastCompute = { payloadBase: null, temporal };
+  const payloadBase = {
+    lat: state.lat,
+    lon: state.lon,
+    half_size_deg: state.half_size_deg ?? BASE_CONFIG.half_size_deg,
+    roof_year: BASE_CONFIG.roof_year,
+    presence_threshold: BASE_CONFIG.presence_threshold,
+    min_height_m: BASE_CONFIG.min_height_m,
+    panel_efficiency: BASE_CONFIG.panel_efficiency,
+    performance_ratio: BASE_CONFIG.performance_ratio,
+    building_confidence: BASE_CONFIG.building_confidence,
+  };
+  state.lastCompute.payloadBase = payloadBase;
+
+  try {
+    dom.runComputeBtn.disabled = true;
+    setStatus('Running backend calculations...');
+    const baseline = await fetchBaseline({ ...payloadBase, ...temporal });
+    const yieldData = await fetchYield({ ...payloadBase, ...temporal });
+    if (yieldData.status !== 'ok') {
+      setStatus(yieldData.message || 'No rooftop found at selected point.');
+      return;
+    }
+    state.lastYield = yieldData;
+    renderResultBox(baseline, yieldData);
+    renderRooftopAnalysis(yieldData);
+    renderShadeMatrix(yieldData);
+    renderKpis(baseline, yieldData, baseline.temporal_window);
+    if (mapCtrl) {
+      mapCtrl.renderBuildingLayer(yieldData.geojson);
+    }
+
+    if (yieldData.selection_warning) {
+      showToast(yieldData.selection_warning);
+    }
+
+    if (dom.btnTemperature?.classList.contains('active')) {
+      await showOverlayForLayer('temperature_delta');
+    }
+
+    setStatus('Computing trend curve...');
+    const series = await computeSeries(payloadBase, temporal);
+    setChart(series.labels, series.values, temporal.label);
+    setStatus('Done. Dashboard updated.');
+
+    // Keep last 5 computations for quick comparison.
+    saveCalculation({ baseline, yieldData, temporal, series });
+  } catch (e) {
+    setStatus(`Failed: ${e.message}`);
+    showToast('Computation failed. Check backend/server logs.');
+  } finally {
+    dom.runComputeBtn.disabled = false;
+  }
 }
 
-async function loadPresetsAndApply() {
+function initYearMonthSelectors() {
+  for (let m = 0; m < 12; m += 1) {
+    dom.startMonth.add(new Option(MONTHS[m], String(m)));
+    dom.endMonth.add(new Option(MONTHS[m], String(m)));
+  }
+  const thisYear = new Date().getFullYear();
+  for (let y = 2022; y <= thisYear; y += 1) {
+    dom.startYear.add(new Option(String(y), String(y)));
+    dom.endYear.add(new Option(String(y), String(y)));
+  }
+  dom.startMonth.value = '0';
+  dom.endMonth.value = '11';
+  dom.startYear.value = String(thisYear - 1);
+  dom.endYear.value = String(thisYear - 1);
+}
+
+function initClock() {
+  const tick = () => {
+    dom.clock.textContent = new Date().toLocaleString();
+  };
+  tick();
+  setInterval(tick, 1000);
+}
+
+function initIntro() {
+  const canvas = dom.introCanvas;
+  const ctx = canvas?.getContext('2d');
+  if (!canvas || !ctx || !dom.introOverlay || !dom.skipIntro) return;
+  let done = false;
+  let raf = 0;
+  const introStart = performance.now();
+  const MAX_PCT = 99;
+  const STEP_MS = 42;
+  let lastPct = 1;
+
+  function resize() {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  function draw(t) {
+    if (done) return;
+    const elapsed = performance.now() - introStart;
+    const nextPct = Math.min(MAX_PCT, 1 + Math.floor(elapsed / STEP_MS));
+    if (nextPct !== lastPct && dom.introLoader) {
+      lastPct = nextPct;
+      dom.introLoader.textContent = `${lastPct}%`;
+    }
+    const w = canvas.width;
+    const h = canvas.height;
+    ctx.clearRect(0, 0, w, h);
+    ctx.fillStyle = 'rgba(3,6,13,1)';
+    ctx.fillRect(0, 0, w, h);
+    for (let i = 0; i < 300; i += 1) {
+      const x = (i * 53 + t * 0.05) % (w + 40) - 20;
+      const y = (i * 97) % h;
+      const a = 0.15 + ((i % 9) / 10);
+      ctx.fillStyle = `rgba(255,190,110,${a * 0.3})`;
+      ctx.fillRect(x, y, 1.2, 1.2);
+    }
+    const r = 58 + Math.sin(t * 0.0012) * 8;
+    const gx = w * 0.5;
+    const gy = h * 0.5;
+    const grad = ctx.createRadialGradient(gx, gy, 0, gx, gy, r * 3);
+    grad.addColorStop(0, 'rgba(255,215,150,0.9)');
+    grad.addColorStop(0.3, 'rgba(255,145,40,0.45)');
+    grad.addColorStop(1, 'rgba(255,100,20,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(gx, gy, r * 3, 0, Math.PI * 2);
+    ctx.fill();
+    raf = requestAnimationFrame(draw);
+  }
+  raf = requestAnimationFrame(draw);
+
+  function finishIntro() {
+    if (done) return;
+    done = true;
+    cancelAnimationFrame(raf);
+    try {
+      if (dom.introLoader) dom.introLoader.textContent = '100%';
+      dom.introOverlay.classList.add('done');
+      setTimeout(() => dom.introOverlay.remove(), 520);
+    } catch {
+      // keep UI unblocked even if DOM cleanup fails
+    }
+  }
+  dom.skipIntro.addEventListener('click', finishIntro, { once: true });
+  setTimeout(finishIntro, 4200);
+}
+
+async function initPresets() {
   try {
     const presets = await fetchPresets();
-    const bounds = presets?.baseline?.year_bounds;
-    if (!bounds) return;
-
-    dom.baselineYear.value = bounds.default;
-    dom.quarterYear.value = bounds.default;
-
-    dom.baselineYear.min = bounds.min;
-    dom.baselineYear.max = bounds.max;
-    dom.quarterYear.min = bounds.min;
-    dom.quarterYear.max = bounds.max;
+    const y = String(presets?.baseline?.year_bounds?.default || Number(dom.startYear.value));
+    dom.startYear.value = y;
+    dom.endYear.value = y;
   } catch {
-    // Keep static defaults when presets are unavailable.
+    // optional presets
   }
-}
-
-function tilesPayload(layer) {
-  return {
-    ...basePayload(),
-    ...baselineTemporalPayload(),
-    project_id: undefined, // backend uses env default if not provided
-    layer,
-  };
-}
-
-async function enableOverlay(id, layer) {
-  const opacity = Number(dom.overlayOpacity?.value || 70) / 100;
-  const payload = tilesPayload(layer);
-  const res = await fetchTiles(payload);
-  if (res.status !== 'ok' || !res.urlTemplate) {
-    throw new Error(res.detail || 'Tiles endpoint failed');
-  }
-  mapCtrl.addRasterOverlay(id, res.urlTemplate, opacity, 'aoi-line');
 }
 
 function bindEvents() {
-  dom.unitKwh.addEventListener('click', () => {
-    state.energyUnit = 'kWh';
-    dom.unitKwh.classList.add('active');
-    dom.unitMwh.classList.remove('active');
-    refreshCard();
-  });
+  dom.runComputeBtn.addEventListener('click', runCompute);
+  dom.btnStreet.addEventListener('click', () => mapCtrl?.setBasemap('street'));
+  dom.btnSatellite.addEventListener('click', () => mapCtrl?.setBasemap('satellite'));
+  dom.btnHybrid.addEventListener('click', () => mapCtrl?.setBasemap('hybrid'));
 
-  dom.unitMwh.addEventListener('click', () => {
-    state.energyUnit = 'MWh';
-    dom.unitMwh.classList.add('active');
-    dom.unitKwh.classList.remove('active');
-    refreshCard();
-  });
+  dom.btnTemperature?.addEventListener('click', () => showOverlayForLayer('temperature_delta'));
 
-  dom.mode.addEventListener('change', handleModeChange);
-  dom.runBaselineBtn.addEventListener('click', handleBaselineRun);
-  dom.runYieldBtn.addEventListener('click', handleYieldRun);
+  if (mapCtrl) {
+    mapCtrl.onMapClick(async (event) => {
+      const clickedLat = Number(event.latlng.lat);
+      const clickedLon = Number(event.latlng.lng);
 
-  mapCtrl.onMapClick((event) => {
-    const lat = event.latlng.lat;
-    const lon = event.latlng.lng;
-    dom.lat.value = lat.toFixed(6);
-    dom.lon.value = lon.toFixed(6);
-    mapCtrl.drawAOI(lat, lon, Number(dom.halfSize.value || 0.01));
-  });
+      state.lat = clickedLat;
+      state.lon = clickedLon;
+      dom.aoiLat.textContent = state.lat.toFixed(6);
+      dom.aoiLon.textContent = state.lon.toFixed(6);
 
-  dom.halfSize.addEventListener('change', () => {
-    if (!dom.lat.value || !dom.lon.value) return;
-    mapCtrl.drawAOI(Number(dom.lat.value), Number(dom.lon.value), Number(dom.halfSize.value || 0.01));
-  });
+      const mPerDegLat = 111320;
+      const mPerDegLon = 111320 * Math.cos((state.lat * Math.PI) / 180);
 
-  dom.btnStreet.addEventListener('click', () => mapCtrl.setBasemap('street'));
-  dom.btnSatellite.addEventListener('click', () => mapCtrl.setBasemap('satellite'));
-  dom.btnHybrid.addEventListener('click', () => mapCtrl.setBasemap('hybrid'));
+      const PICK_HALF_DEG = 0.003; // small search window around click
+      const MIN_HALF_DEG = 0.0015;
+      const MAX_HALF_DEG = BASE_CONFIG.half_size_deg;
 
-  dom.overlayOpacity?.addEventListener('input', () => {
-    const opacity = Number(dom.overlayOpacity.value || 70) / 100;
-    mapCtrl.setOverlayOpacity(opacity);
-  });
+      let nextHalf = state.half_size_deg ?? BASE_CONFIG.half_size_deg;
+      let pickedBuildingAreaM2 = null;
 
-  dom.ovRoofMask?.addEventListener('change', async () => {
+      try {
+        const buildingsRes = await fetchBuildings({
+          lat: state.lat,
+          lon: state.lon,
+          half_size_deg: PICK_HALF_DEG,
+          building_confidence: BASE_CONFIG.building_confidence,
+          limit: 400,
+        });
+
+        const features = buildingsRes?.geojson?.features || [];
+        for (const f of features) {
+          const ring = firstRingFromGeoGeometry(f?.geometry);
+          if (!ring) continue;
+          if (!pointInRing(state.lon, state.lat, ring)) continue;
+
+          const areaM2 = Number(f?.properties?.area_in_meters ?? 0);
+          if (areaM2 > 0) {
+            pickedBuildingAreaM2 = areaM2;
+            const radiusM = Math.sqrt(areaM2 / Math.PI);
+            // AOI is drawn as a square, so convert radius (m) to half-size in degrees (lat).
+            const halfDeg = radiusM / mPerDegLat;
+            nextHalf = Math.max(MIN_HALF_DEG, Math.min(MAX_HALF_DEG, halfDeg));
+          }
+          break;
+        }
+      } catch {
+        // Fall back to previous half_size_deg if selection fails.
+      }
+
+      state.half_size_deg = nextHalf;
+      const areaRectM2 =
+        (state.half_size_deg * 2 * mPerDegLat) * (state.half_size_deg * 2 * mPerDegLon);
+      dom.aoiArea.textContent = `${fmtNum(areaRectM2, 0)} m2`;
+      mapCtrl.drawAOI(state.lat, state.lon, state.half_size_deg);
+
+      setStatus(pickedBuildingAreaM2 ? 'Building selected. Click COMPUTE.' : 'Click registered. Click COMPUTE.');
+    });
+
+    mapCtrl.onSavedPointClick(({ id }) => {
+      loadSavedCalculation(id);
+    });
+  } else {
+    setStatus('Map failed to initialize. Refresh once; if issue persists, check internet for tile scripts.');
+  }
+
+  // Mapbox 3D token-gated mode removed from the UI to keep the map uncluttered.
+}
+
+function startDashboard() {
+  if (startDashboard.started) return;
+  startDashboard.started = true;
+
+  initClock();
+  try {
+    mapCtrl = createMapController();
+  } catch (error) {
+    showToast(`Map init failed: ${error.message}`);
+  }
+  initYearMonthSelectors();
+  initPresets();
+  bindEvents();
+}
+
+function startIntroThenDashboard() {
+  if (!dom.introOverlay) {
+    startDashboard();
+    return;
+  }
+
+  let done = false;
+  let unmount = null;
+  const finish = () => {
+    if (done) return;
+    done = true;
     try {
-      if (dom.ovRoofMask.checked) await enableOverlay('roofMask', 'roof_mask');
-      else mapCtrl.removeRasterOverlay('roofMask');
-    } catch (e) {
-      dom.ovRoofMask.checked = false;
-      showToast(`Overlay failed: ${e.message}`, 5200);
+      unmount?.();
+    } catch {
+      // ignore
     }
-  });
-  dom.ovShadow?.addEventListener('change', async () => {
     try {
-      if (dom.ovShadow.checked) await enableOverlay('shadow', 'shadow_frequency');
-      else mapCtrl.removeRasterOverlay('shadow');
-    } catch (e) {
-      dom.ovShadow.checked = false;
-      showToast(`Overlay failed: ${e.message}`, 5200);
+      dom.introOverlay.classList.add('done');
+      setTimeout(() => dom.introOverlay?.remove(), 520);
+    } catch {
+      // ignore
     }
-  });
-  dom.ovNetIrr?.addEventListener('change', async () => {
-    try {
-      if (dom.ovNetIrr.checked) await enableOverlay('netIrr', 'net_irradiance');
-      else mapCtrl.removeRasterOverlay('netIrr');
-    } catch (e) {
-      dom.ovNetIrr.checked = false;
-      showToast(`Overlay failed: ${e.message}`, 5200);
+    startDashboard();
+  };
+
+  // Safety valve: always unblocks the UI even if intro fails.
+  const safety = setTimeout(finish, 7_000);
+
+  // User-facing fallback: if the React intro fails, this still works.
+  dom.skipIntroFallback?.addEventListener('click', () => finish(), { once: true });
+
+  // Also listen for clicks on the React skip button (id="skipIntro") if it renders.
+  try {
+    dom.skipIntro?.addEventListener('click', () => finish(), { once: true });
+  } catch {
+    // ignore
+  }
+
+  // Extra robustness: delegate clicks by id so we don't depend on element presence timing.
+  document.addEventListener(
+    'click',
+    (e) => {
+      const el = e.target?.closest?.('#skipIntro,#skipIntroFallback,#skipIntroFallback');
+      if (el) finish();
+    },
+    { capture: true },
+  );
+
+  try {
+    const api = window.pvIntro;
+    if (api?.startIntro) {
+      unmount = api.startIntro({ mountId: 'intro-root', onComplete: finish });
+      return;
     }
-  });
-  dom.ovDerate?.addEventListener('change', async () => {
-    try {
-      if (dom.ovDerate.checked) await enableOverlay('derate', 'combined_derate');
-      else mapCtrl.removeRasterOverlay('derate');
-    } catch (e) {
-      dom.ovDerate.checked = false;
-      showToast(`Overlay failed: ${e.message}`, 5200);
-    }
-  });
+  } catch {
+    // fall through to finish()
+  }
+
+  clearTimeout(safety);
+  finish();
 }
 
 function start() {
-  bindEvents();
-  handleModeChange();
-  loadPresetsAndApply();
-
-  runIntroSequence(() => {
-    setTimeout(() => mapCtrl.invalidate(), 220);
-    setTimeout(() => mapCtrl.invalidate(), 740);
-  });
+  startIntroThenDashboard();
 }
 
 start();

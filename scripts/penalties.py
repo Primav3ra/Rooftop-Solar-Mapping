@@ -184,11 +184,14 @@ class ShadowPenalty:
         """
         if solar_positions is None:
             pwt = ShadowPenalty._DELHI_POSITIONS
-        elif len(solar_positions[0]) == 3:
-            pwt = solar_positions
+        elif len(solar_positions[0]) >= 3:
+            # solar_positions entries are expected as:
+            #   (alt_deg, az_deg_from_north, weight, ...metadata)
+            pwt = [(a, z, w) for (a, z, w, *_rest) in solar_positions]
         else:
+            # Fallback: entries do not include weights (e.g. (alt, az)).
             n = len(solar_positions)
-            pwt = [(a, z, 1.0 / n) for a, z in solar_positions]
+            pwt = [(a, z, 1.0 / n) for (a, z, *_rest) in solar_positions]
 
         imgs = [
             ShadowPenalty._mask_for_position(building_height, a, z, pixel_size_m)

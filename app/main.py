@@ -23,6 +23,7 @@ from scripts.penalties import (
 from scripts.solar_geometry import (
     solar_positions_yearly,
     solar_positions_quarterly,
+    solar_positions_monthly,
     solar_positions_single_day,
 )
 from scripts.datasets import get_open_buildings_temporal, get_open_buildings_vector
@@ -67,17 +68,19 @@ def resolve_temporal_window(
     baseline_mode: str,
     year: Optional[int],
     quarter: Optional[int],
+    month: Optional[int],
     start_date: Optional[str],
     end_date_exclusive: Optional[str],
 ) -> Dict[str, Any]:
     """
     Map UI mode to [start_date, end_date_exclusive) for ERA5 and solar alignment.
+    monthly: one UTC calendar month.
     daily: exactly one UTC calendar day (end = start + 1 day).
     """
     ly = _last_complete_calendar_year()
     mode = (baseline_mode or "yearly").lower()
-    if mode not in ("yearly", "quarterly", "daily"):
-        raise ValueError("baseline_mode must be yearly, quarterly, or daily")
+    if mode not in ("yearly", "quarterly", "monthly", "daily"):
+        raise ValueError("baseline_mode must be yearly, quarterly, monthly, or daily")
     if mode == "yearly":
         y = year if year is not None else ly
         if y < 2000 or y > ly:
@@ -104,6 +107,24 @@ def resolve_temporal_window(
             "end_date_exclusive": e,
             "calendar_year": y,
             "quarter": q,
+            "month": None,
+        }
+    if mode == "monthly":
+        y = year if year is not None else ly
+        m = month if month is not None else 1
+        if y < 2000 or y > ly:
+            raise ValueError(f"year must be between 2000 and {ly}")
+        if m < 1 or m > 12:
+            raise ValueError("month must be 1..12")
+        s = f"{y}-{m:02d}-01"
+        e = f"{y + 1}-01-01" if m == 12 else f"{y}-{m + 1:02d}-01"
+        return {
+            "mode": "monthly",
+            "start_date": s,
+            "end_date_exclusive": e,
+            "calendar_year": y,
+            "quarter": None,
+            "month": m,
         }
     if not start_date or not end_date_exclusive:
         raise ValueError("daily mode requires start_date and end_date_exclusive (ISO YYYY-MM-DD)")
@@ -121,6 +142,7 @@ def resolve_temporal_window(
         "end_date_exclusive": end_date_exclusive,
         "calendar_year": None,
         "quarter": None,
+        "month": None,
     }
 
 
@@ -143,6 +165,8 @@ def _solar_positions_for_window(
         pos = solar_positions_yearly(lat_deg, lon_deg, y)
     elif mode == "quarterly":
         pos = solar_positions_quarterly(lat_deg, lon_deg, int(win["calendar_year"]), int(win["quarter"]))
+    elif mode == "monthly":
+        pos = solar_positions_monthly(lat_deg, lon_deg, int(win["calendar_year"]), int(win["month"]))
     else:
         d0 = date.fromisoformat(win["start_date"])
         pos = solar_positions_single_day(lat_deg, lon_deg, d0)
@@ -163,6 +187,7 @@ class BaselineRequest(BaseModel):
     baseline_mode: str = "yearly"  # yearly | quarterly | daily
     year: Optional[int] = None
     quarter: Optional[int] = None
+    month: Optional[int] = None
     start_date: Optional[str] = None
     end_date_exclusive: Optional[str] = None
 
@@ -187,9 +212,10 @@ def presets() -> Dict[str, Any]:
     ly = _last_complete_calendar_year()
     return {
         "baseline": {
-            "modes": ["yearly", "quarterly", "daily"],
+            "modes": ["yearly", "quarterly", "monthly", "daily"],
             "year_bounds": {"min": 2000, "max": ly, "default": ly},
             "quarter_default": 2,
+            "month_default": 1,
             "daily_note": "Use start_date and end_date_exclusive in ISO format; end must be start + 1 day (exclusive).",
         },
     }
@@ -224,6 +250,7 @@ def compute_baseline(req: BaselineRequest) -> Dict[str, Any]:
                 req.baseline_mode,
                 req.year,
                 req.quarter,
+                req.month,
                 req.start_date,
                 req.end_date_exclusive,
             )
@@ -265,6 +292,23 @@ def compute_baseline(req: BaselineRequest) -> Dict[str, Any]:
             roof_baseline["baseline_time_mode"] = "quarterly"
             roof_baseline["calendar_year"] = win["calendar_year"]
             roof_baseline["quarter"] = win["quarter"]
+            roof_baseline["start_date"] = s
+            roof_baseline["end_date_exclusive"] = e
+            range_info = utils.get_era5_range_stats(aoi, start_date=s, end_date_exclusive=e)
+
+        elif mode == "monthly":
+            roof_baseline = utils.get_roof_masked_era5_baseline_for_date_range_stats(
+                aoi=aoi,
+                exclusion_mask=exclusion,
+                roof_year=req.roof_year,
+                presence_threshold=req.presence_threshold,
+                min_height_m=req.min_height_m,
+                start_date=s,
+                end_date_exclusive=e,
+            )
+            roof_baseline["baseline_time_mode"] = "monthly"
+            roof_baseline["calendar_year"] = win["calendar_year"]
+            roof_baseline["month"] = win["month"]
             roof_baseline["start_date"] = s
             roof_baseline["end_date_exclusive"] = e
             range_info = utils.get_era5_range_stats(aoi, start_date=s, end_date_exclusive=e)
@@ -312,6 +356,7 @@ class YieldRequest(BaseModel):
     baseline_mode: str = "yearly"
     year: Optional[int] = None
     quarter: Optional[int] = None
+    month: Optional[int] = None
     start_date: Optional[str] = None
     end_date_exclusive: Optional[str] = None
     panel_efficiency: float = 0.18
@@ -331,9 +376,10 @@ class TilesRequest(BaseModel):
     baseline_mode: str = "yearly"
     year: Optional[int] = None
     quarter: Optional[int] = None
+    month: Optional[int] = None
     start_date: Optional[str] = None
     end_date_exclusive: Optional[str] = None
-    layer: Literal["roof_mask", "shadow_frequency", "net_irradiance", "combined_derate"] = "roof_mask"
+    layer: Literal["roof_mask", "shadow_frequency", "net_irradiance", "combined_derate", "temperature_delta"] = "roof_mask"
 
 
 class BuildingsRequest(BaseModel):
@@ -384,6 +430,7 @@ def tiles(req: TilesRequest) -> Dict[str, Any]:
       - shadow_frequency: shadow frequency (0..1)
       - net_irradiance: net irradiance (kWh/m^2 over window)
       - combined_derate: uhi_derate * soiling_retention (scalar image)
+      - temperature_delta: UHI delta temperature (MODIS LST daytime anomaly; degC)
     """
     try:
         try:
@@ -391,6 +438,7 @@ def tiles(req: TilesRequest) -> Dict[str, Any]:
                 req.baseline_mode,
                 req.year,
                 req.quarter,
+                req.month,
                 req.start_date,
                 req.end_date_exclusive,
             )
@@ -445,6 +493,28 @@ def tiles(req: TilesRequest) -> Dict[str, Any]:
         elif req.layer == "shadow_frequency":
             img = shadow_freq.clamp(0, 1)
             vis = {"min": 0, "max": 1, "palette": ["0b1020", "f97316"]}
+        elif req.layer == "temperature_delta":
+            # UHI = urban mean LST - ~20km background focal mean (see UHIPenalty.stats).
+            uhi_year = int(s[:4])
+            lst = (
+                ee.ImageCollection(UHIPenalty.MODIS_COLLECTION)
+                .filterBounds(aoi)
+                .filterDate(f"{uhi_year}-01-01", f"{uhi_year + 1}-01-01")
+                .select(UHIPenalty.LST_DAY_BAND)
+                .median()
+                .multiply(UHIPenalty.LST_SCALE)
+                .subtract(UHIPenalty.K_TO_C_OFFSET)
+                .rename("LST_celsius")
+            )
+            background = lst.focal_mean(
+                radius=UHIPenalty.BACKGROUND_KERNEL_PX,
+                kernelType="circle",
+                units="pixels",
+            )
+            img = lst.subtract(background).rename("delta_t_uhi_celsius").clip(aoi).clamp(-3.0, 8.0)
+            # Typical Indian UHI anomalies: ~2-6 degC (but allow a bit wider).
+            # Avoid the bright yellow/orange used by irradiance visualizations; keep it cleaner.
+            vis = {"min": -3.0, "max": 8.0, "palette": ["2563eb", "22c55e", "a855f7", "ef4444"]}
         elif req.layer == "combined_derate":
             img = ee.Image.constant(combined_derate).rename("combined_derate").clip(aoi)
             vis = {"min": 0.9, "max": 1.0, "palette": ["ef4444", "f59e0b", "22c55e"]}
@@ -629,6 +699,7 @@ def compute_yield(req: YieldRequest) -> Dict[str, Any]:
                 req.baseline_mode,
                 req.year,
                 req.quarter,
+                req.month,
                 req.start_date,
                 req.end_date_exclusive,
             )
@@ -689,23 +760,47 @@ def compute_yield(req: YieldRequest) -> Dict[str, Any]:
             .getInfo()
         )
 
-        period_label = {"yearly": "calendar_year", "quarterly": "calendar_quarter", "daily": "single_day"}[win["mode"]]
+        period_label = {"yearly": "calendar_year", "quarterly": "calendar_quarter", "monthly": "calendar_month", "daily": "single_day"}[win["mode"]]
+        building_selection_source = "vector_centroid_point"
+        selection_warning: Optional[str] = None
+
+        # When the selected point falls near a polygon edge (or the selected building has low confidence),
+        # `filterBounds(centroid)` can return empty. This is a UI "non-functional" failure mode.
+        # We fix it by trying a small buffer around the centroid, and finally falling back to the AOI.
+        if target_building is None:
+            try:
+                # 30 meters buffer in geodesic coordinates (EE handles this in metres for lon/lat points).
+                target_building = (
+                    get_open_buildings_vector(aoi, confidence_threshold=req.building_confidence)
+                    .filterBounds(centroid.buffer(30))
+                    .first()
+                    .getInfo()
+                )
+                building_selection_source = "vector_centroid_buffer30m" if target_building is not None else building_selection_source
+            except Exception:
+                # Fall through to AOI fallback
+                target_building = None
 
         if target_building is None:
-            return {
-                "status": "no_building_at_point",
-                "message": "No Open Buildings polygon found at the selected point. Try clicking on a rooftop.",
-                "regional_ghi_kwh_m2_period": regional_ghi_kwh_m2_period,
-                "irradiance_source": "ERA5",
-                "baseline_time_mode": win["mode"],
-                "start_date": s,
-                "end_date_exclusive": e,
-                "accounting_period": period_label,
-                "geojson": None,
+            building_selection_source = "aoi_fallback"
+            selection_warning = (
+                "No Open Buildings polygon found at the selected point; using the AOI roof mask for calculations."
+            )
+            building_geom = aoi
+            building_props = {
+                "confidence": req.building_confidence,
+                "area_in_meters": None,
             }
-
-        building_geom = ee.Feature(target_building).geometry()
-        building_props = target_building.get("properties", {})
+            aoi_ring = coords  # square_aoi_from_point already returns a closed ring
+            building_geojson_feature = {
+                "type": "Feature",
+                "geometry": {"type": "Polygon", "coordinates": [aoi_ring]},
+                "properties": {},
+            }
+        else:
+            building_geom = ee.Feature(target_building).geometry()
+            building_props = target_building.get("properties", {})
+            building_geojson_feature = target_building
 
         energy_img = (
             net_irr
@@ -743,10 +838,138 @@ def compute_yield(req: YieldRequest) -> Dict[str, Any]:
             .getInfo()
         )
 
-        total_energy_kwh = (stats.get("energy_kwh_pixel") or 0.0) * req.panel_efficiency * req.performance_ratio
         roof_area_m2 = roof_area_stats.get("roof_candidate") or 0.0
         mean_shadow_frequency = shadow_stats.get("shadow_frequency")
         mean_shadow_fraction = mean_shadow_frequency  # shadow_freq IS the fraction in shadow
+
+        # ------------------------------------------------------------------
+        # Stage-wise yields (authoritative, computed on the SAME geometry)
+        #
+        # We must NOT mix AOI-level baselines (/api/baseline) with building-level
+        # net yield (/api/yield), otherwise loss% becomes misleading.
+        #
+        # All values below are PV output (kWh) and are directly comparable:
+        #   baseline_yield_kwh          : no penalties (GHI * roof_area * eff * PR)
+        #   after_shadow_yield_kwh      : apply shadow (beam-corrected) only
+        #   after_uhi_yield_kwh         : shadow + uhi
+        #   after_soiling_yield_kwh     : shadow + uhi + soiling  (== net)
+        # ------------------------------------------------------------------
+
+        def _sum_kwh(img_kwh_m2: ee.Image, band: str) -> float:
+            sraw = (
+                img_kwh_m2
+                .multiply(roof_mask.toFloat())
+                .multiply(ee.Image.pixelArea())
+                .rename("kwh_pixel")
+                .reduceRegion(
+                    reducer=ee.Reducer.sum(),
+                    geometry=building_geom,
+                    scale=4.0,
+                    maxPixels=1e7,
+                )
+                .getInfo()
+            )
+            return float((sraw or {}).get("kwh_pixel") or 0.0)
+
+        baseline_irr = ee.Image.constant(regional_ghi_kwh_m2_period).rename("baseline_ghi_kwh_m2_period")
+        shadow_only_irr = net_irradiance_image(
+            regional_ghi_kwh_m2_period,
+            shadow_freq,
+            beam_fraction=beam_fraction,
+            uhi_derate=1.0,
+            soiling_retention=1.0,
+        )
+        uhi_only_irr = net_irradiance_image(
+            regional_ghi_kwh_m2_period,
+            shadow_freq,
+            beam_fraction=beam_fraction,
+            uhi_derate=float(uhi_info["uhi_derate_factor"]),
+            soiling_retention=1.0,
+        )
+        soiling_irr = net_irr  # shadow + uhi + soiling (already built)
+
+        baseline_roof_kwh = _sum_kwh(baseline_irr, "baseline_ghi_kwh_m2_period")
+        after_shadow_roof_kwh = _sum_kwh(shadow_only_irr, "net_irradiance_kwh_m2_period")
+        after_uhi_roof_kwh = _sum_kwh(uhi_only_irr, "net_irradiance_kwh_m2_period")
+        after_soiling_roof_kwh = float(stats.get("energy_kwh_pixel") or 0.0)
+
+        baseline_yield_kwh = baseline_roof_kwh * req.panel_efficiency * req.performance_ratio
+        after_shadow_yield_kwh = after_shadow_roof_kwh * req.panel_efficiency * req.performance_ratio
+        after_uhi_yield_kwh = after_uhi_roof_kwh * req.panel_efficiency * req.performance_ratio
+        after_soiling_yield_kwh = after_soiling_roof_kwh * req.panel_efficiency * req.performance_ratio
+
+        total_energy_kwh = after_soiling_yield_kwh
+
+        penalty_loss_kwh = max(0.0, baseline_yield_kwh - total_energy_kwh)
+        penalty_loss_pct = (penalty_loss_kwh / baseline_yield_kwh * 100.0) if baseline_yield_kwh > 0 else 0.0
+
+        shadow_loss_kwh = max(0.0, baseline_yield_kwh - after_shadow_yield_kwh)
+        uhi_loss_kwh = max(0.0, after_shadow_yield_kwh - after_uhi_yield_kwh)
+        soiling_loss_kwh = max(0.0, after_uhi_yield_kwh - after_soiling_yield_kwh)
+        loss_total_for_split = shadow_loss_kwh + uhi_loss_kwh + soiling_loss_kwh
+        if loss_total_for_split <= 0:
+            shadow_contrib_pct = 0.0
+            uhi_contrib_pct = 0.0
+            soiling_contrib_pct = 0.0
+        else:
+            shadow_contrib_pct = shadow_loss_kwh / loss_total_for_split * 100.0
+            uhi_contrib_pct = uhi_loss_kwh / loss_total_for_split * 100.0
+            soiling_contrib_pct = soiling_loss_kwh / loss_total_for_split * 100.0
+
+        # ------------------------------------------------------------------
+        # Rooftop shade matrix (6 evenly distributed 4-hour UTC buckets)
+        # ------------------------------------------------------------------
+        shade_intervals = []
+        bucket_specs = [
+            ("00-04", 0, 4),
+            ("04-08", 4, 8),
+            ("08-12", 8, 12),
+            ("12-16", 12, 16),
+            ("16-20", 16, 20),
+            ("20-24", 20, 24),
+        ]
+        # solar_positions is a list of (alt_deg, az_deg, weight, hour_utc)
+        for label, h0, h1 in bucket_specs:
+            bucket_positions = [
+                (p[0], p[1], p[2], p[3])
+                for p in (solar_positions or [])
+                if len(p) >= 4 and p[3] >= h0 and p[3] < h1
+            ]
+            if not bucket_positions:
+                shade_fraction = 0.0
+            else:
+                wsum = sum(float(p[2]) for p in bucket_positions)
+                if wsum <= 0:
+                    shade_fraction = 0.0
+                else:
+                    norm_positions = [
+                        (p[0], p[1], p[2] / wsum, p[3]) for p in bucket_positions
+                    ]
+                    shadow_freq_bucket = ShadowPenalty.frequency(
+                        building_height, solar_positions=norm_positions
+                    )
+                    bucket_stats = (
+                        shadow_freq_bucket.reduceRegion(
+                            reducer=ee.Reducer.mean(),
+                            geometry=building_geom,
+                            scale=4.0,
+                            maxPixels=1e7,
+                        )
+                        .getInfo()
+                    )
+                    raw_bucket = (bucket_stats or {}).get("shadow_frequency")
+                    shade_fraction = float(raw_bucket) if raw_bucket is not None else 0.0
+
+            shade_area_m2 = float(roof_area_m2) * float(shade_fraction)
+            shade_intervals.append(
+                {
+                    "label": label,
+                    "shade_fraction": round(shade_fraction, 5),
+                    "shade_percent": round(shade_fraction * 100.0, 2),
+                    "shade_area_m2": round(shade_area_m2, 2),
+                }
+            )
+
         mean_shadow_retention = (
             round(1.0 - mean_shadow_frequency * beam_fraction, 4)
             if mean_shadow_frequency is not None else None
@@ -757,24 +980,52 @@ def compute_yield(req: YieldRequest) -> Dict[str, Any]:
             if mean_shadow_retention is not None else None
         )
 
+        shadow_penalty_percent = (
+            round((1.0 - mean_shadow_retention) * 100.0, 2) if mean_shadow_retention is not None else None
+        )
+        uhi_penalty_percent = round((1.0 - uhi_info["uhi_derate_factor"]) * 100.0, 2)
+        soiling_penalty_percent = round((1.0 - soiling_info["soiling_retention_factor"]) * 100.0, 2)
+        combined_penalty_percent = round((1.0 - combined_derate) * 100.0, 2)
+
         out = {
             "status": "ok",
             "baseline_time_mode": win["mode"],
             "start_date": s,
             "end_date_exclusive": e,
             "accounting_period": period_label,
+            "building_selection_source": building_selection_source,
+            "selection_warning": selection_warning,
             "regional_ghi_kwh_m2_period": regional_ghi_kwh_m2_period,
             "ghi_sample_source": ghi_info["source"],
             "irradiance_source": "ERA5",
             "panel_efficiency": req.panel_efficiency,
             "performance_ratio": req.performance_ratio,
-            "calendar_year": win["calendar_year"],
-            "quarter": win["quarter"],
+            # Some windows don't define quarter/month keys; keep response stable.
+            "calendar_year": win.get("calendar_year"),
+            "quarter": win.get("quarter"),
+            "month": win.get("month"),
             "building_confidence": building_props.get("confidence"),
             "building_area_in_meters": building_props.get("area_in_meters"),
             "roof_area_m2": roof_area_m2,
             "mean_shadow_fraction": mean_shadow_fraction,
             "mean_shadow_retention": mean_shadow_retention,
+            # Authoritative stage yields (PV output, kWh)
+            "baseline_yield_kwh": round(float(baseline_yield_kwh), 6),
+            "after_shadow_yield_kwh": round(float(after_shadow_yield_kwh), 6),
+            "after_uhi_yield_kwh": round(float(after_uhi_yield_kwh), 6),
+            "after_soiling_yield_kwh": round(float(after_soiling_yield_kwh), 6),
+            # Loss + contribution (of total loss) in kWh / %
+            "penalty_loss_kwh": round(float(penalty_loss_kwh), 6),
+            "penalty_loss_pct": round(float(penalty_loss_pct), 4),
+            "penalty_contribution": {
+                "shadow_loss_kwh": round(float(shadow_loss_kwh), 6),
+                "uhi_loss_kwh": round(float(uhi_loss_kwh), 6),
+                "soiling_loss_kwh": round(float(soiling_loss_kwh), 6),
+                "shadow_contribution_pct": round(float(shadow_contrib_pct), 3),
+                "uhi_contribution_pct": round(float(uhi_contrib_pct), 3),
+                "soiling_contribution_pct": round(float(soiling_contrib_pct), 3),
+            },
+            "shade_intervals": shade_intervals,
             "beam_fraction": beam_fraction,
             "diffuse_fraction": beam_info["diffuse_fraction"],
             "beam_fraction_source": beam_info["source"],
@@ -785,12 +1036,16 @@ def compute_yield(req: YieldRequest) -> Dict[str, Any]:
             "combined_derate_factor": round(combined_derate, 5),
             "net_irradiance_kwh_m2_period": net_irr_mean,
             "period_yield_kwh": total_energy_kwh,
+            "shadow_penalty_percent": shadow_penalty_percent,
+            "uhi_penalty_percent": uhi_penalty_percent,
+            "soiling_penalty_percent": soiling_penalty_percent,
+            "combined_penalty_percent": combined_penalty_percent,
             "uhi_penalty": uhi_info,
             "soiling_penalty": soiling_info,
             "geojson": {
                 "type": "FeatureCollection",
                 "features": [{
-                    **target_building,
+                    **building_geojson_feature,
                     "properties": {
                         **building_props,
                         "roof_area_m2": roof_area_m2,
@@ -799,6 +1054,7 @@ def compute_yield(req: YieldRequest) -> Dict[str, Any]:
                         "soiling_retention_factor": soiling_info["soiling_retention_factor"],
                         "net_irradiance_kwh_m2_period": net_irr_mean,
                         "period_yield_kwh": total_energy_kwh,
+                        "shade_intervals": shade_intervals,
                     }
                 }]
             },

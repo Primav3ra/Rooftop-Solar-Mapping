@@ -39,3 +39,12 @@ export async function fetchUrbanMetrics(payload) {
   });
   return response.json();
 }
+
+export async function fetchBuildings(payload) {
+  const response = await fetch('/api/buildings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return response.json();
+}

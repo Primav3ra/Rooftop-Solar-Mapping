@@ -4,6 +4,7 @@ Solar altitude and azimuth (degrees, azimuth clockwise from north) for shadow mo
 Used to align insolation-weighted shadow sampling with the user's selected date window:
   yearly   -> key astronomical dates within that calendar year
   quarterly-> mid-month days within that quarter
+  monthly  -> representative days within selected month
   daily    -> single calendar day (UTC date; ERA5 is UTC-based)
 
 Pure math (stdlib only). Azimuth matches penalties.py convention: from geographic north, 0-360.
@@ -15,7 +16,8 @@ import math
 from datetime import date, datetime, timezone
 from typing import List, Tuple
 
-WeightedPosition = Tuple[float, float, float]  # altitude_deg, azimuth_deg_from_north, weight
+# altitude_deg, azimuth_deg_from_north, weight, hour_utc (integer 0..23)
+WeightedPosition = Tuple[float, float, float, int]
 
 
 def sun_altitude_azimuth_north(lat_deg: float, lon_deg: float, when_utc: datetime) -> Tuple[float, float]:
@@ -67,10 +69,10 @@ def sun_altitude_azimuth_north(lat_deg: float, lon_deg: float, when_utc: datetim
 
 
 def _normalize_weights(positions: List[WeightedPosition]) -> List[WeightedPosition]:
-    total = sum(w for _, _, w in positions)
+    total = sum(w for _, _, w, _ in positions)
     if total <= 0:
-        return [(45.0, 180.0, 1.0)]
-    return [(a, z, w / total) for a, z, w in positions]
+        return [(45.0, 180.0, 1.0, 12)]
+    return [(a, z, w / total, h) for a, z, w, h in positions]
 
 
 def weighted_positions_for_calendar_day(
@@ -89,7 +91,7 @@ def weighted_positions_for_calendar_day(
         when = datetime(d.year, d.month, d.day, h, mi, 0, tzinfo=timezone.utc)
         alt, az = sun_altitude_azimuth_north(lat_deg, lon_deg, when)
         if alt >= min_alt_deg:
-            out.append((alt, az, math.sin(math.radians(alt))))
+            out.append((alt, az, math.sin(math.radians(alt)), h))
         t += step_hours
     return _normalize_weights(out)
 
@@ -104,8 +106,8 @@ def merge_weighted_position_sets(sets: List[List[WeightedPosition]]) -> List[Wei
         if wsum <= 0:
             continue
         scale = 1.0 / len(sets)
-        for a, z, w in s:
-            flat.append((a, z, w * scale))
+        for a, z, w, h in s:
+            flat.append((a, z, w * scale, h))
     return _normalize_weights(flat)
 
 
@@ -128,6 +130,15 @@ def solar_positions_quarterly(lat_deg: float, lon_deg: float, year: int, quarter
     month_triples = {1: (1, 2, 3), 2: (4, 5, 6), 3: (7, 8, 9), 4: (10, 11, 12)}
     days = [date(year, m, 15) for m in month_triples[quarter]]
     sets = [weighted_positions_for_calendar_day(lat_deg, lon_deg, d, step_hours=1.5) for d in days]
+    return merge_weighted_position_sets(sets)
+
+
+def solar_positions_monthly(lat_deg: float, lon_deg: float, year: int, month: int) -> List[WeightedPosition]:
+    """Three representative UTC days in the selected month (8th, 15th, 22nd)."""
+    if month < 1 or month > 12:
+        raise ValueError("month must be 1..12")
+    days = [date(year, month, 8), date(year, month, 15), date(year, month, 22)]
+    sets = [weighted_positions_for_calendar_day(lat_deg, lon_deg, d, step_hours=1.0) for d in days]
     return merge_weighted_position_sets(sets)
 
 
